@@ -1,4 +1,3 @@
-
 package fwj.aniss.api.common.bean.worknet;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
