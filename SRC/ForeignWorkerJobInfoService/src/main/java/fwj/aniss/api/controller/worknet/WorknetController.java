@@ -18,8 +18,13 @@ public class WorknetController {
 
     private final WorknetApiService worknetApiService;
 
-    @GetMapping("/jobs")
+    @GetMapping("/foreigner-jobs")
     public Mono<WorknetApiResponse> getForeignerJobs(@RequestParam(required = false) String keyword) throws Exception {
-        return worknetApiService.getForeignerJobPostings(keyword);
+        return worknetApiService.getForeignerJobPostings();
+    }
+
+    @GetMapping("/jobs")
+    public Mono<WorknetApiResponse> getJobs(@RequestParam(required = false) String keyword) throws Exception {
+        return worknetApiService.getJobPostings(keyword);
     }
 }
