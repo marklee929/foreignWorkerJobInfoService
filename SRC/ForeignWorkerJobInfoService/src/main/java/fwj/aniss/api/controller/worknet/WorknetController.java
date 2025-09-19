@@ -19,10 +19,7 @@ public class WorknetController {
     private final WorknetApiService worknetApiService;
 
     @GetMapping("/jobs")
-    public Mono<WorknetApiResponse> getForeignerJobs(@RequestParam(required = false) String keyword) {
-        if (keyword == null || keyword.isBlank()) {
-            throw CommonException.INVALID_PARAM;
-        }
+    public Mono<WorknetApiResponse> getForeignerJobs(@RequestParam(required = false) String keyword) throws Exception {
         return worknetApiService.getForeignerJobPostings(keyword);
     }
 }
