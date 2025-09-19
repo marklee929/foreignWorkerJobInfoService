@@ -1,0 +1,21 @@
+# Java / Build
+/SRC/ForeignWorkerJobInfoService/target/
+build/
+out/
+*.class
+*.jar
+*.war
+*.ear
+*.zip
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+Thumbs.db

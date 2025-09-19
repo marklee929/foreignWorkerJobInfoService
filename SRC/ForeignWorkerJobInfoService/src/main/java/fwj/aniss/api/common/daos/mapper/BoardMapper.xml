@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="fwj.aniss.api.common.daos.BoardDao">
+
+	<insert id="insertBoard" parameterType="fwj.aniss.api.common.bean.board.BoardBean"> insert into
+		board ( title ,contents , member_no ) values ( #{title} ,#{contents} ,#{memberNo} ) </insert>
+
+	<!-- 삭제 -->
+	<delete id="deleteBoardFromMemberNo" parameterType="fwj.aniss.api.common.bean.board.BoardBean">
+		delete from board where member_no = #{memberNo} </delete>
+
+
+	<select id="selectBoardList" parameterType="fwj.aniss.api.common.bean.board.BoardBean"> select
+		board_no as boardNo , title , contents , count , secret_yn as secretYn , member_no as
+		memberNo ,(select name from member where member_no = b.member_no) memberName , reg_dt as
+		regDt from board b where 1=1 <if test="search != null and search != ''"> or title like
+		CONCAT('%', #{search}, '%') or contents like CONCAT('%', #{search}, '%') </if> order by
+		board_no desc limit 10 offset #{page} </select>
+
+	<select id="selectBoardListCount" parameterType="fwj.aniss.api.common.bean.board.BoardBean">
+		select count(*) from board b where 1=1 <if test="search != null and search != ''"> or title
+		like CONCAT('%', #{search}, '%') or contents like CONCAT('%', #{search}, '%') </if>
+	</select>
+
+
+</mapper>
