@@ -1,7 +1,7 @@
 package fwj.aniss.api.common.service.worknet;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.dataformat.xml.XmlMapper;
 import fwj.aniss.api.common.bean.worknet.WorknetApiResponse;
 import fwj.aniss.api.common.bean.worknet.WorknetJobPost;
 import lombok.extern.slf4j.Slf4j;
@@ -21,7 +21,7 @@ import java.util.Optional;
 public class WorknetApiService {
 
     private final WebClient webClient;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final XmlMapper xmlMapper = new XmlMapper();
 
     @Value("${worknet.api.authkey}")
     private String authKey;
@@ -40,7 +40,7 @@ public class WorknetApiService {
                     var ub = uriBuilder
                             .queryParam("authKey", authKey)
                             .queryParam("callTp", "L")
-                            .queryParam("returnType", "JSON")
+                            .queryParam("returnType", "XML")
                             .queryParam("startPage", "1")
                             .queryParam("display", "100");
                     if (keyword != null && !keyword.isBlank()) {
@@ -48,13 +48,12 @@ public class WorknetApiService {
                     }
                     return ub.build();
                 })
-                .header("Accept", "application/json")
                 .retrieve()
                 .bodyToMono(String.class)
                 .flatMap(body -> {
                     log.info("Worknet RAW response for keyword '{}': {}", keyword, body);
                     try {
-                        WorknetApiResponse response = objectMapper.readValue(body, WorknetApiResponse.class);
+                        WorknetApiResponse response = xmlMapper.readValue(body, WorknetApiResponse.class);
                         return Mono.just(response);
                     } catch (Exception e) {
                         log.error("Error deserializing Worknet response for keyword '{}'", keyword, e);
@@ -76,20 +75,19 @@ public class WorknetApiService {
             .flatMap(k -> this.webClient.get().uri(uriBuilder -> uriBuilder
                     .queryParam("authKey", authKey)
                     .queryParam("callTp", "L")
-                    .queryParam("returnType", "JSON")
+                    .queryParam("returnType", "XML")
                     .queryParam("startPage", "1")
                     .queryParam("display", "100")
                     .queryParam("keyword", k)
                     .build())
-                .header("Accept", "application/json")
                 .retrieve()
                 .bodyToMono(String.class)
                 .flatMap(body -> {
                     log.debug("Raw response for keyword '{}': {}", k, body);
                     try {
-                        return Mono.just(objectMapper.readValue(body, WorknetApiResponse.class));
+                        return Mono.just(xmlMapper.readValue(body, WorknetApiResponse.class));
                     } catch (JsonProcessingException e) {
-                        log.warn("Could not parse Worknet response as JSON for keyword '{}'. It might be an XML error message. Body: {}", k, body);
+                        log.warn("Could not parse Worknet response for keyword '{}'. Body: {}", k, body);
                         return Mono.empty(); // XML or other non-JSON response, treat as no data
                     } catch (Exception e) {
                         log.error("Error parsing Worknet response for keyword '{}'", k, e);

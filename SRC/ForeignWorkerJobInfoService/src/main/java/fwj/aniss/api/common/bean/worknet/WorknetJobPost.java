@@ -1,41 +1,41 @@
 package fwj.aniss.api.common.bean.worknet;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.dataformat.xml.annotation.JacksonXmlProperty;
 import lombok.Data;
 
 @Data
 public class WorknetJobPost {
 
-    @JsonProperty("wantedAuthNo")
+    @JacksonXmlProperty(localName = "wantedAuthNo")
     private String wantedAuthNo; // 구인인증번호
 
-    @JsonProperty("company")
+    @JacksonXmlProperty(localName = "company")
     private String company; // 회사명
 
-    @JsonProperty("title")
+    @JacksonXmlProperty(localName = "title")
     private String title; // 채용제목
 
-    @JsonProperty("salTpNm")
+    @JacksonXmlProperty(localName = "salTpNm")
     private String salTpNm; // 임금형태
 
-    @JsonProperty("sal")
+    @JacksonXmlProperty(localName = "sal")
     private String sal; // 급여액
 
-    @JsonProperty("region")
+    @JacksonXmlProperty(localName = "region")
     private String region; // 근무지역
 
-    @JsonProperty("minEdubg")
+    @JacksonXmlProperty(localName = "minEdubg")
     private String minEdubg; // 최소학력
 
-    @JsonProperty("career")
+    @JacksonXmlProperty(localName = "career")
     private String career; // 경력
 
-    @JsonProperty("regDt")
+    @JacksonXmlProperty(localName = "regDt")
     private String regDt; // 등록일
 
-    @JsonProperty("closeDt")
+    @JacksonXmlProperty(localName = "closeDt")
     private String closeDt; // 마감일
 
-    @JsonProperty("wantedInfoUrl")
+    @JacksonXmlProperty(localName = "wantedInfoUrl")
     private String wantedInfoUrl; // 채용정보 URL
 }
