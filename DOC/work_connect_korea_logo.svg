@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1200" height="500" viewBox="0 0 1200 500" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .ring{stroke:#2A7DB1;stroke-width:24;fill:none}
+      .sun{fill:#F4A11E}
+      .moon{fill:#6C3CF0}
+      .green{fill:#34B36B}
+      .text{font-family: "Poppins", "Nunito", "Inter", Arial, sans-serif; font-weight:800}
+      .work{fill:#E33A33}
+      .connect{fill:#1E73BE}
+      .korea{fill:#141414}
+    </style>
+  </defs>
+
+  <!-- Emblem -->
+  <g transform="translate(40,40)">
+    <!-- outer ring -->
+    <circle class="ring" cx="190" cy="210" r="170"/>
+    <!-- heads -->
+    <circle class="sun" cx="140" cy="120" r="34"/>
+    <circle class="moon" cx="240" cy="120" r="34"/>
+    <!-- mountains (clean, not broken) -->
+    <!-- left mountain -->
+    <path class="green" d="M 85 320 L 160 200 L 235 320 Q 160 270 85 320 Z"/>
+    <!-- right mountain -->
+    <path class="green" d="M 160 320 L 235 200 L 310 320 Q 235 270 160 320 Z"/>
+    <!-- handshake / valley -->
+    <path class="green" d="M150 300 Q190 275 230 300 Q210 292 190 292 Q170 292 150 300 Z"/>
+  </g>
+
+  <!-- Text block -->
+  <g class="text">
+    <text class="work" x="420" y="170" font-size="130">Work</text>
+    <text class="connect" x="420" y="315" font-size="130">Connect</text>
+    <!-- place Korea closer (right of "Connect") -->
+    <text class="korea" x="905" y="315" font-size="130">Korea</text>
+  </g>
+</svg>
