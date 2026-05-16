@@ -276,3 +276,35 @@ Refactor life info collector hierarchy for social and research modules
 - 다음 구현 작업은 `social/news` 기반 뉴스 자동화 파이프라인이다.
 - 뉴스 자동화 작업 시작 전 Issue #1과 `DOC/architecture/workflow-guide.md`를 다시 확인한다.
 - 실제 Facebook/Telegram API 호출 없이 dry-run 가능한 DB 저장, 중복 제거, 게시 후보 선별 흐름부터 구현한다.
+
+### 타임스탬프 수정내용 ###
+
+이제 시작하자.
+
+작업 대상:
+C:\WORK\foreign_worker_job_info
+
+먼저 git pull로 최신 main을 받아라.
+
+그 다음 아래 문서를 순서대로 확인해라.
+1. DOC/architecture/workflow-guide.md
+2. DOC/architecture/collector-hierarchy.md
+3. DOC/walkthrough 최신 날짜 문서
+4. 관련 GitHub Issue
+
+이번 작업은 문서에 적힌 “다음 작업”을 기준으로 진행한다.
+
+원칙:
+- README는 비대하게 만들지 않는다.
+- 상세 작업 기록은 DOC/walkthrough에 남긴다.
+- 코드 구조 원칙은 DOC/architecture를 따른다.
+- 민감정보, 토큰, .env, DB 파일, logs 파일은 커밋하지 않는다.
+- 작업 범위 밖 폴더는 수정하지 않는다.
+
+작업 완료 후:
+- 변경 파일 목록
+- 실행/검증 결과
+- 실패한 내용
+- 다음 작업 시작점
+
+을 DOC/walkthrough 최신 날짜 문서에 업데이트하고 commit/push까지 해라.

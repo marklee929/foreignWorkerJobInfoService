@@ -72,3 +72,60 @@ CREATE TABLE IF NOT EXISTS data_quality_score (
     calculated_at TEXT NOT NULL,
     FOREIGN KEY (business_id) REFERENCES life_service_business(id)
 );
+
+CREATE TABLE IF NOT EXISTS news_candidate (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_type TEXT NOT NULL,
+    source_url TEXT,
+    title TEXT NOT NULL,
+    summary TEXT,
+    content TEXT,
+    language TEXT DEFAULT 'ko',
+    category TEXT,
+    hash_key TEXT,
+    similarity_key TEXT,
+    duplicate_group_id INTEGER,
+    status TEXT DEFAULT 'CANDIDATE',
+    collected_at TEXT NOT NULL,
+    published_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_news_candidate_hash_key
+ON news_candidate(hash_key);
+
+CREATE INDEX IF NOT EXISTS idx_news_candidate_status
+ON news_candidate(status);
+
+CREATE TABLE IF NOT EXISTS facebook_publish_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    news_candidate_id INTEGER NOT NULL,
+    page_id TEXT,
+    facebook_post_id TEXT,
+    status TEXT NOT NULL,
+    error_code TEXT,
+    error_message TEXT,
+    published_at TEXT NOT NULL,
+    FOREIGN KEY(news_candidate_id) REFERENCES news_candidate(id)
+);
+
+CREATE TABLE IF NOT EXISTS telegram_notify_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    news_candidate_id INTEGER,
+    message TEXT NOT NULL,
+    status TEXT NOT NULL,
+    error_message TEXT,
+    sent_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS news_performance_snapshot (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    news_candidate_id INTEGER,
+    facebook_post_id TEXT,
+    impressions INTEGER,
+    reach INTEGER,
+    reactions INTEGER,
+    comments INTEGER,
+    shares INTEGER,
+    clicks INTEGER,
+    snapshot_at TEXT NOT NULL
+);
