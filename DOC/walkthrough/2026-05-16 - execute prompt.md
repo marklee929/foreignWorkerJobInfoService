@@ -3,308 +3,273 @@
 작업 대상:
 C:\WORK\foreign_worker_job_info\SRC\foreign_worker_life_info_collector
 
-GitHub:
-marklee929/foreignWorkerJobInfoService
-
-목표:
-현재 foreign_worker_life_info_collector의 폴더 하이어라키를 기능/도메인/저장소/외부채널 기준으로 재정리한다.
-이번 작업은 “뉴스 자동화 파이프라인 구현 전 구조 정리”가 목적이다.
-
-중요:
-- Spring Boot 프로젝트인 SRC/ForeignWorkerJobInfoService는 건드리지 않는다.
-- 작업 대상은 SRC/foreign_worker_life_info_collector 내부만이다.
-- 민감정보, 토큰, API 키, .env 파일은 절대 커밋하지 않는다.
-- 기존 파일은 바로 삭제하지 말고 이동/래핑 방식으로 정리한다.
-- import 경로가 깨지지 않도록 수정한다.
-- 가능한 경우 기존 기능이 동작하도록 backward compatibility wrapper를 둔다.
-- 작업 후 git status를 확인하고, 변경 내용을 commit/push까지 수행한다.
+먼저 git pull 후 DOC/architecture/workflow-guide.md와 DOC/architecture/collector-hierarchy.md를 확인해라.
 
 현재 문제:
-최상위에 config, crawler, crew_team, logs, normalizer, parser, quality, storage 등이 평면적으로 놓여 있다.
-이 상태에서는 “기능 레이어”와 “데이터 정체성/도메인”이 섞일 가능성이 크다.
+최상위에 crawler, parser, normalizer, quality 폴더가 아직 남아 있다.
+이전 작업에서 legacy wrapper로 남겨둔 것으로 보이지만, 사용자가 원하는 최종 구조는 탐색기 기준으로도 최상위 평면 폴더를 제거하는 것이다.
 
-정리 원칙:
-1. config는 프로젝트 운영 설정 담당
-2. crew_team은 각 작업을 수행하는 봇/오케스트레이터 계층
-3. research는 데이터 수집·검증·정규화 기능 계층
-4. crawler는 research 아래로 이동
-5. parser는 research 아래로 이동
-6. 비즈니스 데이터 normalizer는 research 아래로 이동
-7. 공통 문자열/URL/hash/date normalizer는 utils 아래로 이동
-8. social은 Facebook, Telegram, Naver 등 외부 채널 배포/연동 계층
-9. 뉴스는 Facebook Page 운영에 종속된 social 콘텐츠이므로 social/news 아래로 둔다
-10. Telegram은 현재 게시 결과 알림/운영 알림 담당이므로 social/telegram 아래로 둔다
-11. domains는 데이터의 실제 정체성/카테고리 계층
-12. storage는 DB, JSON cache, runtime state, raw data 담당
-13. logs는 서버/작업 실행 로그만 담당
-14. quality는 최상위 폴더로 두지 말고 research/quality 또는 social/news/quality로 분리한다
+이번 작업 목표:
+최상위 legacy wrapper 폴더를 제거하고, 실제 목표 하이어라키 기준으로 정리한다.
 
-목표 하이어라키:
+대상 legacy 폴더:
+- crawler/
+- parser/
+- normalizer/
+- quality/
 
-SRC/foreign_worker_life_info_collector/
-  config/
-    __init__.py
-    settings.py
-    keywords.py
-    sources.py
-    social_channels.py
+작업 순서:
+1. 각 legacy 폴더 내부 파일을 확인한다.
+2. 실제 구현 파일인지 wrapper인지 구분한다.
+3. 실제 구현 파일이 있으면 research/* 또는 utils/*의 적절한 위치로 이동한다.
+4. 단순 wrapper라면 삭제한다.
+5. 기존 import 호환이 반드시 필요하면 폴더를 남기지 말고 다음 중 하나로 처리한다.
+   - foreign_worker_life_info_collector/compat.py
+   - foreign_worker_life_info_collector/legacy_imports.py
+   - 또는 README/DOC에 breaking change로 기록
+6. __pycache__ 폴더는 삭제한다.
+7. import 경로와 tests를 수정한다.
+8. python -m foreign_worker_life_info_collector 실행이 깨지지 않는지 확인한다.
+9. 변경 결과를 DOC/walkthrough 최신 날짜 문서에 기록한다.
+10. git status 확인 후 commit/push한다.
 
-  crew_team/
-    __init__.py
-    social/
-      __init__.py
-      news_bot.py
-      facebook_publish_bot.py
-      telegram_notify_bot.py
-    research/
-      __init__.py
-      collector_bot.py
-      verifier_bot.py
-      normalizer_bot.py
-    lifestyle/
-      __init__.py
-      immigration_bot.py
-      labor_bot.py
-      hospital_bot.py
-      housing_bot.py
-
-  social/
-    __init__.py
-    facebook/
-      __init__.py
-      page_client.py
-      post_builder.py
-      publish_log.py
-    telegram/
-      __init__.py
-      bot_client.py
-      notifier.py
-    news/
-      __init__.py
-      models.py
-      pipeline.py
-      collector/
-        __init__.py
-        naver_news_collector.py
-        google_news_collector.py
-        rss_news_collector.py
-      normalizer/
-        __init__.py
-        news_normalizer.py
-      duplicate_guard/
-        __init__.py
-        duplicate_detector.py
-      quality/
-        __init__.py
-        news_quality_score.py
-      repository/
-        __init__.py
-        news_repository.py
-
-  research/
-    __init__.py
-    pipeline.py
-    crawler/
-      __init__.py
-      naver_search_collector.py
-      google_search_collector.py
-      local_site_collector.py
-    parser/
-      __init__.py
-      business_info_parser.py
-      contact_parser.py
-      address_parser.py
-      language_parser.py
-    normalizer/
-      __init__.py
-      business_normalizer.py
-      region_normalizer.py
-      duplicate_detector.py
-    quality/
-      __init__.py
-      quality_score_calculator.py
-      stale_data_detector.py
-      source_reliability_checker.py
-    repository/
-      __init__.py
-      research_repository.py
-
-  domains/
-    __init__.py
-    immigration/
-      __init__.py
-    labor/
-      __init__.py
-    hospital/
-      __init__.py
-    housing/
-      __init__.py
-    translation/
-      __init__.py
-    local_support/
-      __init__.py
-
-  storage/
-    __init__.py
-    db/
-      __init__.py
-      sqlite_client.py
-      migrations/
-      schema.sql
-    cache/
-    state/
-    raw/
-
-  utils/
-    __init__.py
-    text_normalizer.py
-    url_normalizer.py
-    hash_utils.py
-    date_utils.py
-    logging_utils.py
-
-  logs/
-
-  tests/
-
-각 폴더 역할:
-
-config:
-- 환경변수명, 검색 키워드, 수집 소스, 소셜 채널 설정을 관리한다.
-- 실제 토큰/API 키는 저장하지 않는다.
-
-crew_team:
-- 직접 수집/게시/저장 로직을 구현하지 않는다.
-- research, social, storage 모듈을 호출하는 오케스트레이터 역할만 한다.
-- 예: news_bot은 수집→정규화→중복검사→게시→알림 흐름을 호출한다.
-
-social:
-- 외부 채널 연동 담당.
-- Facebook Page 게시, Telegram 알림, 추후 Naver Blog/카페/WhatsApp 등 확장 가능.
-- 뉴스 자동화는 social/news에 둔다.
-
-research:
-- 생활정보 원천 데이터를 수집·검증·정규화하는 기능 모듈.
-- crawler, parser, normalizer, quality, repository를 포함한다.
-- research/news 구조는 만들지 않는다.
-- research는 데이터 카테고리가 아니라 수집 기능이다.
-
-domains:
-- 데이터의 실제 정체성을 표현한다.
-- immigration: 행정사, 이민변호사, 비자 상담
-- labor: 노무사, 임금체불, 산재
-- hospital: 외국인 진료 가능 병원
-- housing: 주거, 기숙사, 부동산
-- translation: 통역/번역 기관
-- local_support: 외국인 지원센터, 다문화가족지원센터
-
-storage:
-- SQLite DB, JSON cache, raw data, runtime state 저장 담당.
-- schema.sql은 storage/db/migrations 또는 storage/db 아래로 이동한다.
-- DB 파일, cache, raw data는 gitignore 처리한다.
-
-utils:
-- 공통 문자열 정규화, URL 정규화, hash 생성, 날짜 처리, logging helper 담당.
-- 비즈니스 의미가 강한 정규화는 research/normalizer에 둔다.
-
-quality:
-- 최상위 폴더로 두지 않는다.
-- 생활정보 품질 평가는 research/quality.
-- 뉴스 품질 평가는 social/news/quality 또는 duplicate_guard와 가까운 곳에 둔다.
-
-logs:
-- 실행 로그만 저장한다.
-- git에 실제 로그 파일은 올리지 않는다.
-
-이번 작업의 범위:
-1. 현재 파일 구조를 분석한다.
-2. 위 목표 구조에 맞게 폴더를 생성한다.
-3. 기존 crawler/parser/normalizer/quality/schema.sql 파일을 적절한 위치로 이동한다.
-4. import 경로를 수정한다.
-5. 기존 실행 진입점이 깨지지 않도록 __main__.py 또는 compatibility wrapper를 수정한다.
-6. README.md에 새 하이어라키 설명을 반영한다.
-7. schema.sql 위치 변경 시 README 실행 예시도 수정한다.
-8. tests가 있으면 import 경로를 수정한다.
-9. dry-run 수준의 최소 실행 확인을 한다.
-10. git status로 민감정보/DB/log 파일이 포함되지 않았는지 확인한다.
-11. 변경 내용을 commit/push한다.
-
-금지:
-- SRC/ForeignWorkerJobInfoService 수정 금지
-- PyQLE-project 수정 금지
-- C:\WORK 전체 탐색 금지
-- 민감정보 커밋 금지
-- 실제 Facebook/Telegram API 호출 금지
-- 기존 파일을 무작정 삭제 금지
+주의:
+- SRC/ForeignWorkerJobInfoService Spring 프로젝트는 수정하지 않는다.
+- PyQLE-project는 수정하지 않는다.
+- 실제 DB 파일, logs, cache, raw data는 커밋하지 않는다.
+- 기능 구현은 하지 않는다. 이번 작업은 폴더 구조 정리만 한다.
+- crawler/parser/normalizer/quality 최상위 폴더가 작업 후 탐색기에서 보이지 않아야 한다.
 
 완료 기준:
-- 폴더 구조가 위 하이어라키에 맞게 정리된다.
-- `python -m foreign_worker_life_info_collector` 실행이 최소한 깨지지 않는다.
-- 기존 README의 설명이 새 구조와 일치한다.
-- schema.sql 위치가 README와 일치한다.
-- git status에 .env, *.db, logs, raw/cache 파일이 포함되지 않는다.
-- commit/push가 완료된다.
+- 최상위 crawler/parser/normalizer/quality 폴더가 제거된다.
+- research/crawler, research/parser, research/normalizer, research/quality 구조가 유지된다.
+- utils에는 공통 유틸만 남는다.
+- 실행 테스트 또는 import 테스트 결과가 walkthrough에 기록된다.
+- commit/push 완료.
 
 커밋 메시지:
-Refactor life info collector hierarchy for social and research modules
+Remove legacy top-level collector wrappers
 
-## 2026-05-16 문서 운영 구조 정리
-
-### 현재 상태
-
-- `DOC/architecture/workflow-guide.md`가 생성되어 ChatGPT 대화, GitHub 문서, Codex 작업을 연결하는 기본 운영 패턴을 정의한다.
-- 앞으로 Codex 작업은 먼저 `git pull`을 수행하고, `DOC/architecture/workflow-guide.md`, 최신 `DOC/walkthrough` 문서, 관련 GitHub Issue를 확인한 뒤 시작한다.
-- README는 프로젝트 소개와 상세 문서 링크만 담는 입구 문서로 유지한다.
-- 상세 설계, 작업 로그, Codex 작업 결과, 시행착오 기록은 README가 아니라 `DOC` 아래에 남긴다.
-
-### 확인한 문서와 이슈
-
-- `DOC/architecture/workflow-guide.md`
-- `DOC/walkthrough/2026-05-16.md`
-- GitHub Issue #1: Social 뉴스 자동화 파이프라인
-- GitHub Issue #2: README 최소화 및 DOC/walkthrough 일자별 기록 분리
-
-### 완료된 것
-
-- 최신 `main`을 pull 받았다.
-- `DOC/architecture`, `DOC/walkthrough`, `DOC/database` 기준 구조를 확인했다.
-- 루트 README를 간결한 프로젝트 소개와 DOC 링크 중심으로 정리한다.
-- `DOC/database`에는 DB 설계 문서를 둘 위치를 만든다.
-
-### 다음 작업
-
-- 다음 구현 작업은 `social/news` 기반 뉴스 자동화 파이프라인이다.
-- 뉴스 자동화 작업 시작 전 Issue #1과 `DOC/architecture/workflow-guide.md`를 다시 확인한다.
-- 실제 Facebook/Telegram API 호출 없이 dry-run 가능한 DB 저장, 중복 제거, 게시 후보 선별 흐름부터 구현한다.
 
 ### 타임스탬프 수정내용 ###
 
-이제 시작하자.
-
 작업 대상:
-C:\WORK\foreign_worker_job_info
+C:\WORK\foreign_worker_job_info\SRC\foreign_worker_life_info_collector
 
-먼저 git pull로 최신 main을 받아라.
+GitHub repository:
+marklee929/foreignWorkerJobInfoService
 
-그 다음 아래 문서를 순서대로 확인해라.
+먼저 최신 main을 pull 받아라.
+
+그 다음 아래 문서를 반드시 확인해라.
+
 1. DOC/architecture/workflow-guide.md
 2. DOC/architecture/collector-hierarchy.md
-3. DOC/walkthrough 최신 날짜 문서
-4. 관련 GitHub Issue
+3. DOC/architecture/social-news-automation.md
+4. DOC/walkthrough 최신 날짜 문서
 
-이번 작업은 문서에 적힌 “다음 작업”을 기준으로 진행한다.
+이번 작업 목표:
+기존 Telegram 승인 기반 뉴스 플로우를 제거하고, social/news 기준의 완전 자동화 뉴스 업데이트 파이프라인을 구현한다.
 
-원칙:
-- README는 비대하게 만들지 않는다.
-- 상세 작업 기록은 DOC/walkthrough에 남긴다.
-- 코드 구조 원칙은 DOC/architecture를 따른다.
-- 민감정보, 토큰, .env, DB 파일, logs 파일은 커밋하지 않는다.
-- 작업 범위 밖 폴더는 수정하지 않는다.
+현재 기존 흐름:
+SEARCH NAVER FOR FOREIGNER WORK NEWS IN ENGLISH
+→ SELECT BEST CANDIDATE
+→ SEND IT TO TELEGRAM
+→ USER APPROVE / REJECT / KEEP
+→ APPROVED ONLY PUBLISH
+
+변경할 목표 흐름:
+SEARCH NAVER FOR FOREIGNER WORK NEWS IN ENGLISH/KOREAN
+→ COLLECT CANDIDATE NEWS
+→ NORMALIZE
+→ SAVE CANDIDATES INTO DATABASE
+→ SUMMARIZE
+→ DUPLICATE CHECK
+→ OPTIONAL LOCAL LLAMA RELEVANCE/DUPLICATE CHECK
+→ SELECT BEST CANDIDATE AUTOMATICALLY
+→ AUTO PUBLISH TO FACEBOOK
+→ SEND PUBLISH RESULT TO TELEGRAM FOR USER CHECK ONLY
+→ SAVE PUBLISH RESULT INTO DATABASE
+→ CONTINUE NEXT CYCLE
+
+중요:
+Telegram 승인/거절/보류 플로우는 제거한다.
+Telegram은 더 이상 승인 UI가 아니다.
+Telegram은 게시 결과, 실패 사유, 중복 스킵 결과를 알려주는 운영 알림 채널이다.
+
+작업 범위:
+- SRC/foreign_worker_life_info_collector 내부만 수정한다.
+- Spring 프로젝트 SRC/ForeignWorkerJobInfoService는 수정하지 않는다.
+- PyQLE-project는 수정하지 않는다.
+- 실제 Facebook/Telegram API 호출은 dry-run에서는 하지 않는다.
+- 실제 토큰/API 키는 코드나 문서에 쓰지 않는다.
+
+권장 모듈 위치:
+social/news/
+
+필요하면 아래 구조를 생성하거나 정리한다.
+
+social/
+  news/
+    pipeline.py
+    models.py
+    collector/
+      naver_news_collector.py
+    normalizer/
+      news_normalizer.py
+    summarizer/
+      news_summarizer.py
+    evaluator/
+      candidate_evaluator.py
+    duplicate_guard/
+      duplicate_detector.py
+      llama_duplicate_checker.py
+    publisher/
+      facebook_publisher.py
+    notifier/
+      telegram_notifier.py
+    repository/
+      news_repository.py
+
+shared connector가 필요하면 아래 위치를 사용한다.
+
+social/
+  facebook/
+    page_client.py
+    post_builder.py
+  telegram/
+    bot_client.py
+    notifier.py
+
+DB 요구사항:
+뉴스 후보와 게시 결과를 반드시 DB에 저장한다.
+
+필수 테이블 또는 동등한 저장 구조:
+- news_candidate
+- facebook_publish_log
+- telegram_notify_log
+- news_performance_snapshot는 추후용으로 만들어도 됨
+
+news_candidate 상태값:
+- CANDIDATE
+- NORMALIZED
+- SUMMARIZED
+- DUPLICATE
+- SKIPPED
+- READY_TO_PUBLISH
+- PUBLISHED
+- FAILED
+- NOTIFIED
+
+중복 방지 기준:
+1. canonical URL 중복
+2. title hash 중복
+3. similarity_key 중복
+4. 최근 게시된 뉴스와 제목 유사도 비교
+5. 같은 날짜/같은 키워드/같은 사건 반복 게시 방지
+6. local LLaMA가 설정되어 있으면 semantic duplicate check 수행
+
+local LLaMA 조건:
+- LOCAL_LLAMA_ENDPOINT 환경변수가 있을 때만 사용한다.
+- LLaMA가 없거나 timeout이면 deterministic duplicate rule로 fallback한다.
+- LLaMA 결과는 advisory로만 사용하고, 전체 파이프라인을 중단시키지 않는다.
+- LLaMA는 summary/relevance/semantic duplicate check에만 사용한다.
+- LLaMA가 직접 publish 여부를 단독 결정하지 않게 한다.
+
+자동 후보 선택:
+candidate_evaluator는 아래 기준으로 점수를 계산한다.
+
+- foreign_worker_relevance_score
+- freshness_score
+- source_reliability_score
+- duplicate_risk_score
+- content_clarity_score
+- facebook_post_suitability_score
+
+가장 높은 후보를 READY_TO_PUBLISH로 지정한다.
+중복이면 DUPLICATE.
+품질 낮으면 SKIPPED.
+게시 실패하면 FAILED.
+
+Facebook 게시:
+실제 모드에서만 Facebook Page에 게시한다.
+dry-run에서는 게시 내용을 생성만 하고 API 호출하지 않는다.
+
+필수 환경변수:
+- FACEBOOK_PAGE_ID
+- FACEBOOK_PAGE_ACCESS_TOKEN
+
+Telegram 알림:
+게시 후 결과만 전송한다.
+승인 버튼/승인 대기/approve/reject/keep 관련 코드는 제거하거나 사용하지 않는다.
+
+필수 환경변수:
+- TELEGRAM_BOT_TOKEN
+- TELEGRAM_CHAT_ID
+
+Telegram 알림 예시:
+[WorkConnect News Published]
+Status: PUBLISHED
+Title: ...
+Source: ...
+Facebook Post ID: ...
+Duplicate score: ...
+Summary: ...
+
+dry-run 요구사항:
+아래 명령으로 실행 가능하게 만든다.
+
+$env:PYTHONPATH="C:\WORK\foreign_worker_job_info\SRC"
+python -m foreign_worker_life_info_collector.social.news.pipeline --db .\logs\news.db --dry-run
+
+dry-run에서는:
+- sample 또는 실제 수집 후보를 사용
+- DB 저장
+- normalize
+- summarize
+- duplicate check
+- evaluator 실행
+- Facebook publish simulation
+- Telegram notify simulation
+- 상태값 업데이트
+까지 수행한다.
+
+실제 모드:
+환경변수가 없으면 명확한 에러 메시지를 출력하고 실패 로그를 남긴다.
+환경변수가 있으면 자동 게시 후 Telegram 결과 알림을 보낸다.
+
+기존 승인 플로우 제거:
+다음 개념/함수/상태/문구가 있다면 제거하거나 비활성화한다.
+
+- approve
+- reject
+- keep
+- waiting_for_approval
+- send_candidate_to_telegram_for_approval
+- approval callback
+- user decision
+- manual approval required
+
+대신:
+- auto_select
+- auto_publish
+- notify_publish_result
+- save_publish_result
+
+로 전환한다.
 
 작업 완료 후:
-- 변경 파일 목록
-- 실행/검증 결과
-- 실패한 내용
-- 다음 작업 시작점
+1. 테스트 또는 dry-run 실행 결과를 확인한다.
+2. DOC/walkthrough 최신 날짜 문서에 다음 내용을 기록한다.
+   - 변경 파일 목록
+   - 승인 플로우 제거 여부
+   - dry-run 결과
+   - DB 저장 확인 여부
+   - 남은 문제
+   - 다음 작업 시작점
+3. git status 확인
+4. 민감정보, DB 파일, logs 파일이 커밋 대상에 없는지 확인
+5. commit/push 수행
 
-을 DOC/walkthrough 최신 날짜 문서에 업데이트하고 commit/push까지 해라.
+커밋 메시지:
+Implement automated social news publishing pipeline
