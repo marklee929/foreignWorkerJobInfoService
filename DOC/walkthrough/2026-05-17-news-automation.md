@@ -121,3 +121,49 @@ python -m foreign_worker_life_info_collector.social.news.pipeline --db $db --dry
 - `social/news/quality/news_quality_score.py`를 게시 후보 선별 흐름에 연결한다.
 - `news_candidate.status` 전이 규칙을 `SKIPPED`, `FAILED`까지 확장하고 실패 로그/재시도 기준을 정한다.
 - 실제 Facebook/Telegram client는 환경변수 기반으로만 활성화하고, 기본값은 계속 dry-run으로 둔다.
+
+## 2026-05-17 legacy top-level wrapper 제거
+
+### 변경 파일 목록
+
+- `DOC/architecture/collector-hierarchy.md`
+- `DOC/walkthrough/2026-05-17-news-automation.md`
+- `SRC/foreign_worker_life_info_collector/crawler/*` 삭제
+- `SRC/foreign_worker_life_info_collector/parser/*` 삭제
+- `SRC/foreign_worker_life_info_collector/normalizer/*` 삭제
+- `SRC/foreign_worker_life_info_collector/quality/*` 삭제
+
+### 완료한 내용
+
+- 최상위 `crawler`, `parser`, `normalizer`, `quality` 폴더 내부 파일을 확인했다.
+- 해당 파일들은 실제 구현이 아니라 `research/*` 구현을 재수출하는 compatibility wrapper임을 확인했다.
+- 내부 코드에서 최상위 legacy import 경로를 사용하지 않는 것을 확인했다.
+- 최상위 legacy wrapper 폴더 4개를 제거했다.
+- `SRC/foreign_worker_life_info_collector` 아래의 `__pycache__` 폴더를 삭제했다.
+- `collector-hierarchy.md`에 최종 구조 기준으로 legacy wrapper 폴더를 남기지 않는다는 원칙을 반영했다.
+
+### 실행/검증 결과
+
+```powershell
+$env:PYTHONPATH='C:\WORK\foreign_worker_job_info\SRC'
+python -m foreign_worker_life_info_collector
+```
+
+결과: 정상 실행
+
+```powershell
+$env:PYTHONPATH='C:\WORK\foreign_worker_job_info\SRC'
+python -m unittest discover -s SRC\foreign_worker_life_info_collector\tests
+```
+
+결과: 전체 테스트 통과
+
+### 실패한 내용
+
+- 없음.
+
+### 다음 작업 시작점
+
+- `social/news/quality/news_quality_score.py`를 게시 후보 선별 흐름에 연결한다.
+- `news_candidate.status` 전이 규칙을 `SKIPPED`, `FAILED`까지 확장하고 실패 로그/재시도 기준을 정한다.
+- 실제 Facebook/Telegram client는 환경변수 기반으로만 활성화하고, 기본값은 계속 dry-run으로 둔다.

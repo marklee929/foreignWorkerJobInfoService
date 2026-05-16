@@ -37,7 +37,7 @@ utils/
 
 이 구조는 `crawler`, `parser`, `normalizer`, `quality`가 기능적으로는 research에 속하는데 최상위에 남아 있어 역할이 섞여 보인다.
 
-따라서 실제 리팩터링에서는 legacy wrapper를 남기더라도, 기준 구조는 아래 목표 구조를 따른다.
+따라서 최종 구조에서는 최상위 `crawler`, `parser`, `normalizer`, `quality` 폴더를 두지 않고, 실제 구현은 `research/*` 아래에 둔다.
 
 ## 목표 구조
 
@@ -226,7 +226,8 @@ DB 파일, raw data, cache 파일은 git에 올리지 않는다.
 
 ## 리팩터링 기준
 
-- 기존 최상위 `crawler`, `parser`, `normalizer`, `quality`는 장기적으로 `research/*` 또는 `utils/*`로 이동한다.
-- 기존 import가 깨질 수 있으므로 즉시 삭제하지 않고 wrapper 또는 compatibility layer를 남길 수 있다.
+- 기존 최상위 `crawler`, `parser`, `normalizer`, `quality`는 `research/*` 또는 `utils/*`로 이동한다.
+- 최종 정리 후에는 탐색기 기준으로도 최상위 legacy wrapper 폴더가 보이지 않아야 한다.
+- 기존 최상위 legacy import 경로는 내부 코드에서 사용하지 않는다. 필요한 코드는 `foreign_worker_life_info_collector.research.*` 경로를 사용한다.
 - 이동 후 README와 walkthrough에 실제 위치를 반영한다.
 - 작업 완료 후 dry-run 실행 결과를 walkthrough에 기록한다.
