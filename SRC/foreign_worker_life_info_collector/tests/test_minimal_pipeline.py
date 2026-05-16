@@ -7,7 +7,7 @@ from pathlib import Path
 from foreign_worker_life_info_collector.crew_team.research_manager import ResearchManager
 from foreign_worker_life_info_collector.models import RawSourceData
 from foreign_worker_life_info_collector.research.crawler.local_site_collector import LocalSiteCollector
-from foreign_worker_life_info_collector.storage.db_writer import SQLiteDBWriter
+from foreign_worker_life_info_collector.storage.db.sqlite_client import SQLiteDBWriter
 
 
 class MinimalPipelineTest(unittest.TestCase):

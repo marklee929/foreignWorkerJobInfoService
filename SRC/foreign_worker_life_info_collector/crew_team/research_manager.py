@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import List, Optional
 
 from ..models import DataQualityScore, LifeServiceBusiness, RawSourceData
-from ..storage.db_writer import SQLiteDBWriter
+from ..storage.db.sqlite_client import SQLiteDBWriter
 from .research.collector_bot import CollectorAgent
 from .research.normalizer_bot import NormalizerAgent
 from .research.verifier_bot import VerifierAgent
