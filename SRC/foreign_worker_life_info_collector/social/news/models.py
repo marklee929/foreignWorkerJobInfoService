@@ -25,8 +25,15 @@ class NewsCandidate:
     content: str = ""
     language: str = "ko"
     category: str = ""
+    keyword: str = ""
     hash_key: str = ""
     similarity_key: str = ""
+    short_summary: str = ""
+    key_points: str = ""
+    relevance_reason: str = ""
+    risk_notes: str = ""
+    evaluation_score: float = 0.0
+    duplicate_risk_score: float = 0.0
     status: str = "CANDIDATE"
     collected_at: str = ""
     published_at: str | None = None
@@ -54,10 +61,48 @@ class NewsCandidate:
             "summary": self.summary,
             "language": self.language,
             "category": self.category,
+            "keyword": self.keyword,
             "hash_key": self.hash_key,
             "similarity_key": self.similarity_key,
+            "short_summary": self.short_summary,
+            "key_points": self.key_points,
+            "relevance_reason": self.relevance_reason,
+            "risk_notes": self.risk_notes,
+            "evaluation_score": self.evaluation_score,
+            "duplicate_risk_score": self.duplicate_risk_score,
             "duplicate_group_id": self.duplicate_group_id,
             "status": self.status,
             "collected_at": self.collected_at,
             "published_at": self.published_at,
         }
+
+
+@dataclass
+class NewsSummary:
+    short_summary: str
+    key_points: list[str]
+    relevance_reason: str
+    risk_notes: str = ""
+
+
+@dataclass
+class DuplicateCheckResult:
+    is_duplicate: bool
+    duplicate_group_id: int | None = None
+    duplicate_risk_score: float = 0.0
+    reason: str = ""
+    advisory_source: str = "deterministic"
+
+
+@dataclass
+class CandidateEvaluation:
+    candidate_id: int
+    total_score: float
+    foreign_worker_relevance_score: float
+    freshness_score: float
+    source_reliability_score: float
+    duplicate_risk_score: float
+    content_clarity_score: float
+    facebook_post_suitability_score: float
+    decision: str
+    reason: str = ""

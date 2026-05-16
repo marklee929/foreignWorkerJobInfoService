@@ -1,4 +1,4 @@
-"""Dry-run capable social news automation pipeline."""
+"""Automated social news publishing pipeline."""
 
 from __future__ import annotations
 
@@ -6,13 +6,18 @@ import argparse
 import json
 from pathlib import Path
 
-from ..facebook.post_builder import build_text_post
-from ..telegram.notifier import TelegramNotifier
 from ...utils.date_utils import utc_now_iso
 from .collector.google_news_collector import GoogleNewsCollector
 from .collector.naver_news_collector import NaverNewsCollector
-from .models import NewsItem
+from .duplicate_guard.duplicate_detector import check_duplicate
+from .duplicate_guard.llama_duplicate_checker import LlamaDuplicateChecker
+from .evaluator.candidate_evaluator import CandidateEvaluator
+from .models import CandidateEvaluation, DuplicateCheckResult, NewsCandidate, NewsItem
+from .normalizer.news_normalizer import normalize_news_item
+from .notifier.telegram_notifier import NewsTelegramNotifier
+from .publisher.facebook_publisher import FacebookPublisher
 from .repository.news_repository import NewsRepository
+from .summarizer.news_summarizer import NewsSummarizer
 
 
 class NewsPipeline:
@@ -20,22 +25,31 @@ class NewsPipeline:
         self,
         repository: NewsRepository,
         collectors: list | None = None,
-        telegram_notifier: TelegramNotifier | None = None,
+        summarizer: NewsSummarizer | None = None,
+        evaluator: CandidateEvaluator | None = None,
+        llama_duplicate_checker: LlamaDuplicateChecker | None = None,
+        facebook_publisher: FacebookPublisher | None = None,
+        telegram_notifier: NewsTelegramNotifier | None = None,
     ):
         self.repository = repository
         self.collectors = collectors or [NaverNewsCollector(), GoogleNewsCollector()]
-        self.telegram_notifier = telegram_notifier or TelegramNotifier()
+        self.summarizer = summarizer or NewsSummarizer()
+        self.evaluator = evaluator or CandidateEvaluator()
+        self.llama_duplicate_checker = llama_duplicate_checker or LlamaDuplicateChecker()
+        self.facebook_publisher = facebook_publisher or FacebookPublisher()
+        self.telegram_notifier = telegram_notifier or NewsTelegramNotifier()
 
     def run(self, keyword: str = "외국인 취업 비자", dry_run: bool = True, limit: int = 5) -> dict:
         collected_items = self.collect(keyword)
-        saved_candidates = [self.repository.save(item) for item in collected_items]
-        ready_candidates = self.repository.mark_ready_to_publish(limit=limit)
-        publish_results = [self.publish(candidate, dry_run=dry_run) for candidate in ready_candidates]
+        saved_candidates = [self.save_normalized(item, keyword) for item in collected_items]
+        processed_candidates = [self.process_candidate(candidate) for candidate in saved_candidates]
+        selected_candidates = self.auto_select(processed_candidates, limit=limit)
+        publish_results = [self.auto_publish(candidate, dry_run=dry_run) for candidate in selected_candidates]
         return {
             "dry_run": dry_run,
             "collected_count": len(collected_items),
-            "saved": [candidate.to_dict() for candidate in saved_candidates],
-            "ready_to_publish": [candidate.to_dict() for candidate in ready_candidates],
+            "saved": [candidate.to_dict() for candidate in processed_candidates],
+            "ready_to_publish": [candidate.to_dict() for candidate in selected_candidates],
             "publish_results": publish_results,
         }
 
@@ -45,42 +59,117 @@ class NewsPipeline:
             items.extend(collector.collect(keyword))
         return items or self._dry_run_seed_items(keyword)
 
-    def publish(self, candidate, dry_run: bool = True) -> dict:
-        message = build_text_post(candidate.title, candidate.source_url)
-        timestamp = utc_now_iso()
-        if dry_run:
-            facebook_post_id = f"dry-run-news-{candidate.id}"
-            self.repository.insert_facebook_log(
-                news_candidate_id=candidate.id,
-                page_id="dry-run",
-                facebook_post_id=facebook_post_id,
-                status="DRY_RUN",
-                published_at=timestamp,
-            )
-            self.repository.mark_published(candidate.id, timestamp)
-            notice = "\n".join(
-                [
-                    "[WorkConnect News Published]",
-                    f"제목: {candidate.title}",
-                    f"출처: {candidate.source_url}",
-                    f"Facebook Post ID: {facebook_post_id}",
-                    "상태: DRY_RUN",
-                ]
-            )
-            self.repository.insert_telegram_log(
-                news_candidate_id=candidate.id,
-                message=notice,
-                status="DRY_RUN",
-                sent_at=timestamp,
-            )
-            return {
-                "news_candidate_id": candidate.id,
-                "status": "DRY_RUN",
-                "facebook_post_id": facebook_post_id,
-                "message": message,
-            }
+    def save_normalized(self, item: NewsItem, keyword: str) -> NewsCandidate:
+        candidate = normalize_news_item(NewsCandidate.from_item(item))
+        candidate.keyword = keyword
+        candidate.status = "NORMALIZED"
+        return self.repository.save(candidate)
 
-        raise NotImplementedError("Real Facebook/Telegram publishing requires token-backed clients.")
+    def process_candidate(self, candidate: NewsCandidate) -> NewsCandidate:
+        summary = self.summarizer.summarize(candidate)
+        candidate.short_summary = summary.short_summary
+        candidate.key_points = "\n".join(summary.key_points)
+        candidate.relevance_reason = summary.relevance_reason
+        candidate.risk_notes = summary.risk_notes
+        candidate.status = "SUMMARIZED"
+        candidate = self.repository.update_candidate(candidate)
+
+        duplicate_result = self.check_duplicate(candidate)
+        if duplicate_result.is_duplicate:
+            candidate.status = "DUPLICATE"
+            candidate.duplicate_group_id = duplicate_result.duplicate_group_id
+            candidate.duplicate_risk_score = duplicate_result.duplicate_risk_score
+            candidate.risk_notes = _append_note(candidate.risk_notes, f"Duplicate: {duplicate_result.reason}")
+            return self.repository.update_candidate(candidate)
+
+        evaluation = self.evaluator.evaluate(candidate)
+        candidate.evaluation_score = evaluation.total_score
+        candidate.duplicate_risk_score = evaluation.duplicate_risk_score
+        candidate.status = evaluation.decision
+        candidate.risk_notes = _append_note(candidate.risk_notes, evaluation.reason)
+        return self.repository.update_candidate(candidate)
+
+    def check_duplicate(self, candidate: NewsCandidate) -> DuplicateCheckResult:
+        existing = self.repository.list_candidates()
+        deterministic = check_duplicate(candidate, existing)
+        if deterministic.is_duplicate:
+            return deterministic
+
+        published = self.repository.list_recent_published(limit=20)
+        llama_duplicate, confidence, reason = self.llama_duplicate_checker.check(candidate, published)
+        if llama_duplicate and confidence >= 0.75:
+            return DuplicateCheckResult(
+                True,
+                published[0].duplicate_group_id if published else candidate.duplicate_group_id,
+                confidence,
+                reason,
+                "local_llama",
+            )
+        return deterministic
+
+    def auto_select(self, candidates: list[NewsCandidate], limit: int = 5) -> list[NewsCandidate]:
+        ready = [candidate for candidate in candidates if candidate.status == "READY_TO_PUBLISH"]
+        ready.sort(key=lambda candidate: candidate.evaluation_score, reverse=True)
+        selected = ready[:limit]
+        selected_ids = {candidate.id for candidate in selected}
+        for candidate in ready[limit:]:
+            candidate.status = "SKIPPED"
+            candidate.risk_notes = _append_note(candidate.risk_notes, "Skipped because a higher-scoring candidate was selected.")
+            self.repository.update_candidate(candidate)
+        return [candidate for candidate in selected if candidate.id in selected_ids]
+
+    def auto_publish(self, candidate: NewsCandidate, dry_run: bool = True) -> dict:
+        timestamp = utc_now_iso()
+        publish_result = self.facebook_publisher.publish(candidate, dry_run=dry_run)
+        status = publish_result.get("status", "FAILED")
+        facebook_post_id = publish_result.get("facebook_post_id", "")
+        error_code = publish_result.get("error_code", "")
+        error_message = publish_result.get("error_message", "")
+        self.repository.insert_facebook_log(
+            news_candidate_id=candidate.id,
+            page_id=publish_result.get("page_id", ""),
+            facebook_post_id=facebook_post_id,
+            status=status,
+            error_code=error_code,
+            error_message=error_message,
+            published_at=timestamp,
+        )
+
+        if status in ("DRY_RUN", "PUBLISHED"):
+            self.repository.mark_published(candidate.id, timestamp)
+            candidate.status = "PUBLISHED"
+            candidate.published_at = timestamp
+        else:
+            self.repository.mark_status(candidate.id, "FAILED")
+            candidate.status = "FAILED"
+
+        notify_result = self.telegram_notifier.notify_publish_result(
+            candidate,
+            status=candidate.status,
+            facebook_post_id=facebook_post_id,
+            error_message=error_message,
+            dry_run=dry_run,
+        )
+        self.repository.insert_telegram_log(
+            news_candidate_id=candidate.id,
+            message=notify_result["message"],
+            status=notify_result["status"],
+            error_message=notify_result.get("error_message", ""),
+            sent_at=utc_now_iso(),
+        )
+        if notify_result["status"] in ("DRY_RUN", "NOTIFIED"):
+            self.repository.mark_notified(candidate.id)
+            candidate.status = "NOTIFIED"
+
+        return {
+            "news_candidate_id": candidate.id,
+            "status": candidate.status,
+            "facebook_status": status,
+            "facebook_post_id": facebook_post_id,
+            "telegram_status": notify_result["status"],
+            "message": publish_result.get("message", ""),
+            "error_message": error_message or notify_result.get("error_message", ""),
+        }
 
     def _dry_run_seed_items(self, keyword: str) -> list[NewsItem]:
         return [
@@ -88,7 +177,7 @@ class NewsPipeline:
                 title=f"{keyword} 지원 정책 안내",
                 url="https://example.com/workconnect/news/support-policy",
                 source="dry_run",
-                summary="Dry-run sample news candidate.",
+                summary="Dry-run sample news candidate for foreign workers in Korea.",
                 category="foreign_worker_policy",
             ),
             NewsItem(
@@ -101,11 +190,15 @@ class NewsPipeline:
         ]
 
 
+def _append_note(existing: str, note: str) -> str:
+    return "\n".join(part for part in (existing, note) if part)
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run the social news automation pipeline.")
+    parser = argparse.ArgumentParser(description="Run the automated social news publishing pipeline.")
     parser.add_argument("--db", required=True, help="SQLite database path.")
     parser.add_argument("--keyword", default="외국인 취업 비자", help="News search keyword.")
-    parser.add_argument("--limit", type=int, default=5, help="Maximum candidates to publish.")
+    parser.add_argument("--limit", type=int, default=1, help="Maximum candidates to publish in one cycle.")
     parser.add_argument("--dry-run", action="store_true", help="Run without external Facebook/Telegram calls.")
     args = parser.parse_args(argv)
 

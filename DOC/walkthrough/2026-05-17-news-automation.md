@@ -122,6 +122,83 @@ python -m foreign_worker_life_info_collector.social.news.pipeline --db $db --dry
 - `news_candidate.status` 전이 규칙을 `SKIPPED`, `FAILED`까지 확장하고 실패 로그/재시도 기준을 정한다.
 - 실제 Facebook/Telegram client는 환경변수 기반으로만 활성화하고, 기본값은 계속 dry-run으로 둔다.
 
+## 2026-05-17 automated publishing pipeline 구현
+
+### 변경 파일 목록
+
+- `SRC/foreign_worker_life_info_collector/social/news/pipeline.py`
+- `SRC/foreign_worker_life_info_collector/social/news/models.py`
+- `SRC/foreign_worker_life_info_collector/social/news/normalizer/news_normalizer.py`
+- `SRC/foreign_worker_life_info_collector/social/news/duplicate_guard/duplicate_detector.py`
+- `SRC/foreign_worker_life_info_collector/social/news/duplicate_guard/llama_duplicate_checker.py`
+- `SRC/foreign_worker_life_info_collector/social/news/summarizer/news_summarizer.py`
+- `SRC/foreign_worker_life_info_collector/social/news/evaluator/candidate_evaluator.py`
+- `SRC/foreign_worker_life_info_collector/social/news/publisher/facebook_publisher.py`
+- `SRC/foreign_worker_life_info_collector/social/news/notifier/telegram_notifier.py`
+- `SRC/foreign_worker_life_info_collector/social/facebook/page_client.py`
+- `SRC/foreign_worker_life_info_collector/social/telegram/bot_client.py`
+- `SRC/foreign_worker_life_info_collector/social/news/repository/news_repository.py`
+- `SRC/foreign_worker_life_info_collector/storage/db/migrations/schema.sql`
+- `SRC/foreign_worker_life_info_collector/tests/test_social_news_pipeline.py`
+- `DOC/walkthrough/2026-05-17-news-automation.md`
+
+### 승인 플로우 제거 여부
+
+- 코드 검색 기준 `approve`, `reject`, `keep`, `waiting_for_approval`, `approval callback`, `send_candidate_to_telegram_for_approval`, `user decision` 기반 승인 플로우는 없다.
+- Telegram은 게시 전 승인 UI가 아니라 게시 결과/실패/중복 스킵 결과를 기록하고 알리는 운영 알림 채널로만 사용한다.
+- 파이프라인은 `auto_select`, `auto_publish`, `notify_publish_result`, `save_publish_result` 역할을 수행한다.
+
+### 완료한 내용
+
+- `social/news` 아래에 summarizer, evaluator, publisher, notifier, optional local LLaMA duplicate checker 모듈을 추가했다.
+- dry-run 흐름을 `collect → normalize/save → summarize → duplicate check → evaluate/auto select → Facebook publish simulation → Telegram notify simulation → DB result save`로 재구성했다.
+- Naver/Google 수집 결과가 없으면 deterministic sample 후보로 dry-run을 계속 검증한다.
+- `LOCAL_LLAMA_ENDPOINT`가 있을 때만 semantic duplicate advisory를 시도하고, timeout/error/unparseable 결과는 deterministic rule로 fallback한다.
+- 실제 모드에서 Facebook/Telegram 환경변수가 없으면 API 호출 없이 `FAILED` 로그를 DB에 남긴다.
+- `news_candidate`에 keyword, summary/evaluation/duplicate risk 관련 컬럼을 추가하고 기존 DB에도 필요한 컬럼을 보강하도록 했다.
+
+### dry-run 결과
+
+```powershell
+$env:PYTHONPATH='C:\WORK\foreign_worker_job_info\SRC'
+python -m unittest discover -s SRC\foreign_worker_life_info_collector\tests
+```
+
+결과: `Ran 7 tests in 0.170s`, `OK`
+
+```powershell
+$db = Join-Path $env:TEMP 'workconnect-news-auto-20260517.db'
+Remove-Item -LiteralPath $db -ErrorAction SilentlyContinue
+$env:PYTHONPATH='C:\WORK\foreign_worker_job_info\SRC'
+python -m foreign_worker_life_info_collector.social.news.pipeline --db $db --dry-run --keyword '외국인 취업 비자'
+```
+
+결과:
+
+- 후보 2건 수집/저장
+- 1건은 자동 선별 후 Facebook `DRY_RUN` publish simulation
+- Telegram `DRY_RUN` result notification 저장
+- 최종 상태: `NOTIFIED` 1건, `DUPLICATE` 1건
+
+### DB 저장 확인 여부
+
+- `news_candidate`: 2건
+- `facebook_publish_log`: 1건
+- `telegram_notify_log`: 1건
+- 상태 집계: `DUPLICATE` 1건, `NOTIFIED` 1건
+
+### 실패한 내용
+
+- 실제 Facebook/Telegram API 호출은 수행하지 않았다.
+- 실제 local LLaMA 호출은 `LOCAL_LLAMA_ENDPOINT`가 없는 환경이므로 수행하지 않았다.
+- 최초 구현에서 같은 배치의 뒤 후보가 앞 후보를 역으로 중복 처리하는 문제가 있었고, 중복 비교를 과거 후보 기준으로 제한해 수정했다.
+
+### 다음 작업 시작점
+
+- 실제 운영 cycle runner를 추가해 키워드 목록을 순회하고 API rate limit/backoff를 적용한다.
+- `news_performance_snapshot` 수집을 Facebook Graph API 기반으로 연결한다.
+- 실제 모드 검증은 로컬 환경변수와 비공개 `.env`를 준비한 뒤 공개 저장소에 값이 남지 않게 수행한다.
+
 ## 2026-05-17 legacy top-level wrapper 제거
 
 ### 변경 파일 목록

@@ -1,0 +1,1 @@
+"""News candidate evaluation helpers."""

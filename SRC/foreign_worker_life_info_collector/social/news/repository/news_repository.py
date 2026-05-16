@@ -5,9 +5,33 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from ..duplicate_guard.duplicate_detector import find_duplicate
 from ..models import NewsCandidate
 from ..normalizer.news_normalizer import normalize_news_item
+
+
+NEWS_COLUMNS = (
+    "id",
+    "source_type",
+    "source_url",
+    "title",
+    "summary",
+    "content",
+    "language",
+    "category",
+    "keyword",
+    "hash_key",
+    "similarity_key",
+    "short_summary",
+    "key_points",
+    "relevance_reason",
+    "risk_notes",
+    "evaluation_score",
+    "duplicate_risk_score",
+    "duplicate_group_id",
+    "status",
+    "collected_at",
+    "published_at",
+)
 
 
 class NewsRepository:
@@ -26,9 +50,25 @@ class NewsRepository:
         conn = self.connect()
         try:
             conn.executescript(schema_path.read_text(encoding="utf-8"))
+            self._ensure_news_columns(conn)
             conn.commit()
         finally:
             conn.close()
+
+    def _ensure_news_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(news_candidate)").fetchall()}
+        migrations = {
+            "keyword": "ALTER TABLE news_candidate ADD COLUMN keyword TEXT",
+            "short_summary": "ALTER TABLE news_candidate ADD COLUMN short_summary TEXT",
+            "key_points": "ALTER TABLE news_candidate ADD COLUMN key_points TEXT",
+            "relevance_reason": "ALTER TABLE news_candidate ADD COLUMN relevance_reason TEXT",
+            "risk_notes": "ALTER TABLE news_candidate ADD COLUMN risk_notes TEXT",
+            "evaluation_score": "ALTER TABLE news_candidate ADD COLUMN evaluation_score REAL DEFAULT 0",
+            "duplicate_risk_score": "ALTER TABLE news_candidate ADD COLUMN duplicate_risk_score REAL DEFAULT 0",
+        }
+        for column, statement in migrations.items():
+            if column not in existing:
+                conn.execute(statement)
 
     def list_candidates(self) -> list[NewsCandidate]:
         conn = self.connect()
@@ -36,7 +76,9 @@ class NewsRepository:
             rows = conn.execute(
                 """
                 SELECT id, source_type, source_url, title, summary, content, language, category,
-                       hash_key, similarity_key, duplicate_group_id, status, collected_at, published_at
+                       keyword, hash_key, similarity_key, short_summary, key_points, relevance_reason,
+                       risk_notes, evaluation_score, duplicate_risk_score, duplicate_group_id,
+                       status, collected_at, published_at
                 FROM news_candidate
                 ORDER BY id
                 """
@@ -45,12 +87,26 @@ class NewsRepository:
             conn.close()
         return [self._row_to_candidate(row) for row in rows]
 
+    def list_recent_published(self, limit: int = 20) -> list[NewsCandidate]:
+        conn = self.connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT {', '.join(NEWS_COLUMNS)}
+                FROM news_candidate
+                WHERE status IN ('PUBLISHED', 'NOTIFIED')
+                ORDER BY published_at DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [self._row_to_candidate(row) for row in rows]
+
     def save(self, item) -> NewsCandidate:
         candidate = normalize_news_item(item)
-        duplicate = find_duplicate(candidate, self.list_candidates())
-        if duplicate:
-            candidate.status = "DUPLICATE"
-            candidate.duplicate_group_id = duplicate.duplicate_group_id or duplicate.id
+        candidate.status = candidate.status or "NORMALIZED"
 
         conn = self.connect()
         try:
@@ -58,8 +114,9 @@ class NewsRepository:
                 """
                 INSERT INTO news_candidate
                 (source_type, source_url, title, summary, content, language, category, hash_key,
-                 similarity_key, duplicate_group_id, status, collected_at, published_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 similarity_key, keyword, short_summary, key_points, relevance_reason, risk_notes,
+                 evaluation_score, duplicate_risk_score, duplicate_group_id, status, collected_at, published_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     candidate.source_type,
@@ -71,6 +128,13 @@ class NewsRepository:
                     candidate.category,
                     candidate.hash_key,
                     candidate.similarity_key,
+                    candidate.keyword,
+                    candidate.short_summary,
+                    candidate.key_points,
+                    candidate.relevance_reason,
+                    candidate.risk_notes,
+                    candidate.evaluation_score,
+                    candidate.duplicate_risk_score,
                     candidate.duplicate_group_id,
                     candidate.status,
                     candidate.collected_at,
@@ -89,15 +153,92 @@ class NewsRepository:
             conn.close()
         return candidate
 
+    def update_candidate(self, candidate: NewsCandidate) -> NewsCandidate:
+        if candidate.id is None:
+            raise ValueError("candidate.id is required for update")
+        conn = self.connect()
+        try:
+            conn.execute(
+                """
+                UPDATE news_candidate
+                SET source_type = ?, source_url = ?, title = ?, summary = ?, content = ?,
+                    language = ?, category = ?, keyword = ?, hash_key = ?, similarity_key = ?,
+                    short_summary = ?, key_points = ?, relevance_reason = ?, risk_notes = ?,
+                    evaluation_score = ?, duplicate_risk_score = ?, duplicate_group_id = ?,
+                    status = ?, collected_at = ?, published_at = ?
+                WHERE id = ?
+                """,
+                (
+                    candidate.source_type,
+                    candidate.source_url,
+                    candidate.title,
+                    candidate.summary,
+                    candidate.content,
+                    candidate.language,
+                    candidate.category,
+                    candidate.keyword,
+                    candidate.hash_key,
+                    candidate.similarity_key,
+                    candidate.short_summary,
+                    candidate.key_points,
+                    candidate.relevance_reason,
+                    candidate.risk_notes,
+                    candidate.evaluation_score,
+                    candidate.duplicate_risk_score,
+                    candidate.duplicate_group_id,
+                    candidate.status,
+                    candidate.collected_at,
+                    candidate.published_at,
+                    candidate.id,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return candidate
+
+    def mark_status(
+        self,
+        candidate_id: int,
+        status: str,
+        published_at: str | None = None,
+        evaluation_score: float | None = None,
+        duplicate_risk_score: float | None = None,
+        duplicate_group_id: int | None = None,
+    ) -> None:
+        assignments = ["status = ?"]
+        values: list = [status]
+        if published_at is not None:
+            assignments.append("published_at = ?")
+            values.append(published_at)
+        if evaluation_score is not None:
+            assignments.append("evaluation_score = ?")
+            values.append(evaluation_score)
+        if duplicate_risk_score is not None:
+            assignments.append("duplicate_risk_score = ?")
+            values.append(duplicate_risk_score)
+        if duplicate_group_id is not None:
+            assignments.append("duplicate_group_id = ?")
+            values.append(duplicate_group_id)
+        values.append(candidate_id)
+        conn = self.connect()
+        try:
+            conn.execute(f"UPDATE news_candidate SET {', '.join(assignments)} WHERE id = ?", values)
+            conn.commit()
+        finally:
+            conn.close()
+
     def mark_ready_to_publish(self, limit: int = 5) -> list[NewsCandidate]:
         conn = self.connect()
         try:
             rows = conn.execute(
                 """
                 SELECT id, source_type, source_url, title, summary, content, language, category,
-                       hash_key, similarity_key, duplicate_group_id, status, collected_at, published_at
+                       keyword, hash_key, similarity_key, short_summary, key_points, relevance_reason,
+                       risk_notes, evaluation_score, duplicate_risk_score, duplicate_group_id,
+                       status, collected_at, published_at
                 FROM news_candidate
-                WHERE status = 'CANDIDATE'
+                WHERE status = 'READY_TO_PUBLISH'
                 ORDER BY collected_at, id
                 LIMIT ?
                 """,
@@ -124,6 +265,9 @@ class NewsRepository:
             conn.commit()
         finally:
             conn.close()
+
+    def mark_notified(self, candidate_id: int) -> None:
+        self.mark_status(candidate_id, "NOTIFIED")
 
     def insert_facebook_log(
         self,
@@ -183,8 +327,15 @@ class NewsRepository:
             content=row["content"] or "",
             language=row["language"] or "ko",
             category=row["category"] or "",
+            keyword=row["keyword"] or "",
             hash_key=row["hash_key"] or "",
             similarity_key=row["similarity_key"] or "",
+            short_summary=row["short_summary"] or "",
+            key_points=row["key_points"] or "",
+            relevance_reason=row["relevance_reason"] or "",
+            risk_notes=row["risk_notes"] or "",
+            evaluation_score=float(row["evaluation_score"] or 0.0),
+            duplicate_risk_score=float(row["duplicate_risk_score"] or 0.0),
             duplicate_group_id=row["duplicate_group_id"],
             status=status or row["status"],
             collected_at=row["collected_at"],
