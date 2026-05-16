@@ -1,14 +1,5 @@
-from __future__ import annotations
+"""Compatibility wrapper for research.crawler.base."""
 
-from abc import ABC, abstractmethod
-from typing import List
+from ..research.crawler.base import BaseCollector
 
-from ..models import RawSourceData
-
-
-class BaseCollector(ABC):
-    source_type = "base"
-
-    @abstractmethod
-    def collect(self, keyword: str, limit: int = 10) -> List[RawSourceData]:
-        raise NotImplementedError
+__all__ = ["BaseCollector"]

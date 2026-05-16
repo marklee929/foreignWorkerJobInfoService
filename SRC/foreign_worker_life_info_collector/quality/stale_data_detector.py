@@ -1,11 +1,5 @@
-from __future__ import annotations
+"""Compatibility wrapper for research.quality.stale_data_detector."""
 
-from datetime import datetime, timezone
+from ..research.quality.stale_data_detector import is_stale
 
-
-def is_stale(collected_at: str, max_age_days: int = 90) -> bool:
-    try:
-        collected = datetime.fromisoformat(collected_at.replace("Z", "+00:00"))
-    except ValueError:
-        return True
-    return (datetime.now(timezone.utc) - collected).days > max_age_days
+__all__ = ["is_stale"]

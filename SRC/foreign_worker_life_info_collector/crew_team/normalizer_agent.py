@@ -1,18 +1,5 @@
-from __future__ import annotations
+"""Compatibility wrapper for crew_team.research.normalizer_bot."""
 
-from typing import Iterable, List
+from .research.normalizer_bot import NormalizerAgent, NormalizerBot
 
-from ..models import LifeServiceBusiness, RawSourceData
-from ..normalizer.business_normalizer import normalize_business
-from ..parser.business_info_parser import parse_business_info
-
-
-class NormalizerAgent:
-    role = "외국인 생활정보 정규화 담당"
-
-    def normalize(self, raw_rows: Iterable[RawSourceData]) -> List[LifeServiceBusiness]:
-        businesses: List[LifeServiceBusiness] = []
-        for raw in raw_rows:
-            business = parse_business_info(raw)
-            businesses.append(normalize_business(business, raw))
-        return businesses
+__all__ = ["NormalizerAgent", "NormalizerBot"]

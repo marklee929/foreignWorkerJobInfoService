@@ -1,16 +1,5 @@
-from __future__ import annotations
+"""Compatibility wrapper for crew_team.research.verifier_bot."""
 
-from typing import Iterable, List, Tuple
+from .research.verifier_bot import VerifierAgent, VerifierBot
 
-from ..models import DataQualityScore, LifeServiceBusiness
-from ..quality.quality_score_calculator import calculate_quality_score
-
-
-class VerifierAgent:
-    role = "외국인 생활정보 검증 담당"
-
-    def score(self, businesses: Iterable[LifeServiceBusiness]) -> List[Tuple[LifeServiceBusiness, DataQualityScore]]:
-        scored: List[Tuple[LifeServiceBusiness, DataQualityScore]] = []
-        for business in businesses:
-            scored.append((business, calculate_quality_score(business)))
-        return scored
+__all__ = ["VerifierAgent", "VerifierBot"]

@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite
+*.sqlite3
+__pycache__/
+*.py[cod]
+logs/*
+!logs/.gitkeep
+storage/cache/*
+!storage/cache/.gitkeep
+storage/raw/*
+!storage/raw/.gitkeep
+storage/state/*
+!storage/state/.gitkeep

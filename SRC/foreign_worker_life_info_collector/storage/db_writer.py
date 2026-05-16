@@ -17,7 +17,7 @@ class SQLiteDBWriter:
         return sqlite3.connect(self.db_path)
 
     def initialize(self) -> None:
-        schema_path = Path(__file__).resolve().parents[1] / "schema.sql"
+        schema_path = Path(__file__).resolve().parent / "db" / "migrations" / "schema.sql"
         conn = self.connect()
         try:
             conn.executescript(schema_path.read_text(encoding="utf-8"))

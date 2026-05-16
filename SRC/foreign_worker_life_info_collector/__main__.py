@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .crew_team.research_manager import ResearchManager
+from .research.pipeline import ResearchManager
 from .storage.db_writer import SQLiteDBWriter
 
 

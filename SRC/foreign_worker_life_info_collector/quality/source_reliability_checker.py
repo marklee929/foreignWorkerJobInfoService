@@ -1,14 +1,5 @@
-from __future__ import annotations
+"""Compatibility wrapper for research.quality.source_reliability_checker."""
 
+from ..research.quality.source_reliability_checker import source_reliability_score
 
-def source_reliability_score(source_url: str) -> float:
-    url = (source_url or "").lower()
-    if ".go.kr" in url or "gov.kr" in url:
-        return 1.0
-    if "or.kr" in url or "center" in url:
-        return 0.8
-    if url.startswith("manual://"):
-        return 0.4
-    if url.startswith(("http://", "https://")):
-        return 0.6
-    return 0.2
+__all__ = ["source_reliability_score"]

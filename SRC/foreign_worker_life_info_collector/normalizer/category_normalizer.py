@@ -1,11 +1,5 @@
-from __future__ import annotations
+"""Compatibility wrapper for research.normalizer.category_normalizer."""
 
-from ..config.categories import SERVICE_CATEGORIES
+from ..research.normalizer.category_normalizer import normalize_category
 
-
-def normalize_category(text: str) -> str:
-    lowered = (text or "").lower()
-    for category, keywords in SERVICE_CATEGORIES.items():
-        if any(keyword.lower() in lowered for keyword in keywords):
-            return category
-    return "local_life_info"
+__all__ = ["normalize_category"]

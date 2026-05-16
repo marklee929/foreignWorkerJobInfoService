@@ -1,0 +1,5 @@
+"""Search keyword configuration."""
+
+from .categories import LANGUAGE_KEYWORDS, SERVICE_CATEGORIES, SERVICE_TAG_KEYWORDS
+
+__all__ = ["SERVICE_CATEGORIES", "LANGUAGE_KEYWORDS", "SERVICE_TAG_KEYWORDS"]
