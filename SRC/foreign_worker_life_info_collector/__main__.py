@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from .research.pipeline import ResearchManager
-from .storage.db_writer import SQLiteDBWriter
+from .storage.db.sqlite_client import SQLiteDBWriter
 
 
 def main() -> int:
