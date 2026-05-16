@@ -1,6 +1,31 @@
-"""Google news collector placeholder."""
+"""Google News RSS collector."""
+
+from __future__ import annotations
+
+from urllib.parse import quote_plus
+
+from .rss_news_collector import FetchText, RSSNewsCollector
+from ..models import NewsItem
 
 
 class GoogleNewsCollector:
-    def collect(self, keyword: str) -> list:
-        return []
+    def __init__(self, locale: str = "ko-KR", region: str = "KR", timeout: int = 10, fetch_text: FetchText | None = None):
+        self.locale = locale
+        self.region = region
+        self.timeout = timeout
+        self.fetch_text = fetch_text
+
+    def collect(self, keyword: str, limit: int = 10) -> list[NewsItem]:
+        query = quote_plus(keyword)
+        language = self.locale.split("-")[0]
+        feed_url = (
+            "https://news.google.com/rss/search"
+            f"?q={query}&hl={self.locale}&gl={self.region}&ceid={self.region}:{language}"
+        )
+        collector = RSSNewsCollector(
+            feed_urls=[feed_url],
+            source="google_news",
+            timeout=self.timeout,
+            fetch_text=self.fetch_text,
+        )
+        return collector.collect(keyword="", limit=limit)

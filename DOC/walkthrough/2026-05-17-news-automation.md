@@ -70,3 +70,54 @@ python -m foreign_worker_life_info_collector.social.news.pipeline --db $env:TEMP
 - `news_candidate.status` 전이 규칙을 `FAILED`, `SKIPPED`까지 확장하고 재시도 정책을 정한다.
 - 뉴스 품질 점수(`social/news/quality/news_quality_score.py`)를 게시 후보 선별에 연결한다.
 - 운영 DB 경로는 `.env` 또는 로컬 실행 인자로만 주입하고 DB 파일은 계속 커밋하지 않는다.
+
+## 2026-05-17 collector 구현 후속 작업
+
+### 변경 파일 목록
+
+- `SRC/foreign_worker_life_info_collector/social/news/collector/rss_news_collector.py`
+- `SRC/foreign_worker_life_info_collector/social/news/collector/google_news_collector.py`
+- `SRC/foreign_worker_life_info_collector/social/news/collector/naver_news_collector.py`
+- `SRC/foreign_worker_life_info_collector/tests/test_social_news_collectors.py`
+- `DOC/walkthrough/2026-05-17-news-automation.md`
+
+### 완료한 내용
+
+- RSS collector를 `urllib`와 `xml.etree.ElementTree` 기반으로 구현했다.
+- Google News collector를 Google News RSS search URL 생성 후 RSS collector로 파싱하도록 구현했다.
+- Naver News collector를 `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET` 환경변수가 있을 때만 OpenAPI를 호출하도록 구현했다.
+- Naver/Google/RSS collector 모두 테스트에서는 외부 네트워크 호출 없이 주입된 fetch 함수로 검증 가능하게 했다.
+- 네트워크 오류, XML/JSON 파싱 오류, Naver 환경변수 누락 시 빈 결과를 반환해 기존 dry-run seed 흐름이 깨지지 않게 했다.
+
+### 실행/검증 결과
+
+```powershell
+$env:PYTHONPATH='C:\WORK\foreign_worker_job_info\SRC'
+python -m unittest discover -s SRC\foreign_worker_life_info_collector\tests
+```
+
+결과: `Ran 6 tests in 0.100s`, `OK`
+
+```powershell
+$db = Join-Path $env:TEMP 'workconnect-news-dryrun-20260517.db'
+Remove-Item -LiteralPath $db -ErrorAction SilentlyContinue
+$env:PYTHONPATH='C:\WORK\foreign_worker_job_info\SRC'
+python -m foreign_worker_life_info_collector.social.news.pipeline --db $db --dry-run --keyword '외국인 취업 비자'
+```
+
+결과:
+
+- 기본 실행 환경에서는 Naver credentials가 없고 Google RSS 네트워크 결과가 없어 deterministic dry-run seed 2건으로 검증됐다.
+- 1건은 `PUBLISHED`, 1건은 `DUPLICATE`로 처리됐다.
+- Facebook/Telegram 실제 API 호출 없이 `DRY_RUN` 로그가 생성됐다.
+
+### 실패한 내용
+
+- 실제 외부 뉴스 수집 결과는 로컬 검증에 포함하지 않았다. 테스트는 네트워크 의존성을 피하기 위해 fetch 함수를 주입해 검증했다.
+- Naver OpenAPI는 로컬 환경변수가 없으면 호출하지 않는다.
+
+### 다음 작업 시작점
+
+- `social/news/quality/news_quality_score.py`를 게시 후보 선별 흐름에 연결한다.
+- `news_candidate.status` 전이 규칙을 `SKIPPED`, `FAILED`까지 확장하고 실패 로그/재시도 기준을 정한다.
+- 실제 Facebook/Telegram client는 환경변수 기반으로만 활성화하고, 기본값은 계속 dry-run으로 둔다.
