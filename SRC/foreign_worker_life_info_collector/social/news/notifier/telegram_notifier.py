@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+from ....utils.text_normalizer import normalize_plain_text
 from ...telegram.notifier import TelegramNotifier as SharedTelegramNotifier
 from ..models import NewsCandidate
 
@@ -19,13 +20,15 @@ class NewsTelegramNotifier:
         return "\n".join(
             part
             for part in (
-                "[WorkConnect News Published]",
+                f"[WorkConnect News Published{' - DRY RUN' if status.startswith('DRY_RUN') else ''}]",
                 f"Status: {status}",
-                f"Title: {candidate.title}",
-                f"Source: {candidate.source_url}",
+                f"Title: {normalize_plain_text(candidate.title)}",
+                f"Source: {normalize_plain_text(candidate.source_name or candidate.source_type)}",
+                f"Why selected: {normalize_plain_text(candidate.selection_reason)}" if candidate.selection_reason else "",
+                f"Summary: {normalize_plain_text(candidate.short_summary or candidate.summary)}",
+                f"URL: {candidate.source_url}",
                 f"Facebook Post ID: {facebook_post_id}" if facebook_post_id else "",
                 f"Duplicate score: {candidate.duplicate_risk_score:.2f}",
-                f"Summary: {candidate.short_summary or candidate.summary}",
                 f"Error: {error_message}" if error_message else "",
             )
             if part

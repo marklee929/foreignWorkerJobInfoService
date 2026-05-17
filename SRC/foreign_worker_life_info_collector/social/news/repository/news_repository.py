@@ -13,6 +13,7 @@ NEWS_COLUMNS = (
     "id",
     "source_type",
     "source_url",
+    "source_name",
     "title",
     "summary",
     "content",
@@ -27,6 +28,14 @@ NEWS_COLUMNS = (
     "risk_notes",
     "evaluation_score",
     "duplicate_risk_score",
+    "foreign_worker_relevance_score",
+    "korea_relevance_score",
+    "visa_or_labor_policy_score",
+    "freshness_score",
+    "source_reliability_score",
+    "facebook_post_suitability_score",
+    "selection_reason",
+    "skip_reason",
     "duplicate_group_id",
     "status",
     "collected_at",
@@ -59,12 +68,21 @@ class NewsRepository:
         existing = {row["name"] for row in conn.execute("PRAGMA table_info(news_candidate)").fetchall()}
         migrations = {
             "keyword": "ALTER TABLE news_candidate ADD COLUMN keyword TEXT",
+            "source_name": "ALTER TABLE news_candidate ADD COLUMN source_name TEXT",
             "short_summary": "ALTER TABLE news_candidate ADD COLUMN short_summary TEXT",
             "key_points": "ALTER TABLE news_candidate ADD COLUMN key_points TEXT",
             "relevance_reason": "ALTER TABLE news_candidate ADD COLUMN relevance_reason TEXT",
             "risk_notes": "ALTER TABLE news_candidate ADD COLUMN risk_notes TEXT",
             "evaluation_score": "ALTER TABLE news_candidate ADD COLUMN evaluation_score REAL DEFAULT 0",
             "duplicate_risk_score": "ALTER TABLE news_candidate ADD COLUMN duplicate_risk_score REAL DEFAULT 0",
+            "foreign_worker_relevance_score": "ALTER TABLE news_candidate ADD COLUMN foreign_worker_relevance_score REAL DEFAULT 0",
+            "korea_relevance_score": "ALTER TABLE news_candidate ADD COLUMN korea_relevance_score REAL DEFAULT 0",
+            "visa_or_labor_policy_score": "ALTER TABLE news_candidate ADD COLUMN visa_or_labor_policy_score REAL DEFAULT 0",
+            "freshness_score": "ALTER TABLE news_candidate ADD COLUMN freshness_score REAL DEFAULT 0",
+            "source_reliability_score": "ALTER TABLE news_candidate ADD COLUMN source_reliability_score REAL DEFAULT 0",
+            "facebook_post_suitability_score": "ALTER TABLE news_candidate ADD COLUMN facebook_post_suitability_score REAL DEFAULT 0",
+            "selection_reason": "ALTER TABLE news_candidate ADD COLUMN selection_reason TEXT",
+            "skip_reason": "ALTER TABLE news_candidate ADD COLUMN skip_reason TEXT",
         }
         for column, statement in migrations.items():
             if column not in existing:
@@ -75,9 +93,11 @@ class NewsRepository:
         try:
             rows = conn.execute(
                 """
-                SELECT id, source_type, source_url, title, summary, content, language, category,
+                SELECT id, source_type, source_url, source_name, title, summary, content, language, category,
                        keyword, hash_key, similarity_key, short_summary, key_points, relevance_reason,
-                       risk_notes, evaluation_score, duplicate_risk_score, duplicate_group_id,
+                       risk_notes, evaluation_score, duplicate_risk_score, foreign_worker_relevance_score,
+                       korea_relevance_score, visa_or_labor_policy_score, freshness_score, source_reliability_score,
+                       facebook_post_suitability_score, selection_reason, skip_reason, duplicate_group_id,
                        status, collected_at, published_at
                 FROM news_candidate
                 ORDER BY id
@@ -113,14 +133,18 @@ class NewsRepository:
             cur = conn.execute(
                 """
                 INSERT INTO news_candidate
-                (source_type, source_url, title, summary, content, language, category, hash_key,
+                (source_type, source_url, source_name, title, summary, content, language, category, hash_key,
                  similarity_key, keyword, short_summary, key_points, relevance_reason, risk_notes,
-                 evaluation_score, duplicate_risk_score, duplicate_group_id, status, collected_at, published_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 evaluation_score, duplicate_risk_score, foreign_worker_relevance_score, korea_relevance_score,
+                 visa_or_labor_policy_score, freshness_score, source_reliability_score,
+                 facebook_post_suitability_score, selection_reason, skip_reason, duplicate_group_id,
+                 status, collected_at, published_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     candidate.source_type,
                     candidate.source_url,
+                    candidate.source_name,
                     candidate.title,
                     candidate.summary,
                     candidate.content,
@@ -135,6 +159,14 @@ class NewsRepository:
                     candidate.risk_notes,
                     candidate.evaluation_score,
                     candidate.duplicate_risk_score,
+                    candidate.foreign_worker_relevance_score,
+                    candidate.korea_relevance_score,
+                    candidate.visa_or_labor_policy_score,
+                    candidate.freshness_score,
+                    candidate.source_reliability_score,
+                    candidate.facebook_post_suitability_score,
+                    candidate.selection_reason,
+                    candidate.skip_reason,
                     candidate.duplicate_group_id,
                     candidate.status,
                     candidate.collected_at,
@@ -161,16 +193,20 @@ class NewsRepository:
             conn.execute(
                 """
                 UPDATE news_candidate
-                SET source_type = ?, source_url = ?, title = ?, summary = ?, content = ?,
+                SET source_type = ?, source_url = ?, source_name = ?, title = ?, summary = ?, content = ?,
                     language = ?, category = ?, keyword = ?, hash_key = ?, similarity_key = ?,
                     short_summary = ?, key_points = ?, relevance_reason = ?, risk_notes = ?,
-                    evaluation_score = ?, duplicate_risk_score = ?, duplicate_group_id = ?,
+                    evaluation_score = ?, duplicate_risk_score = ?, foreign_worker_relevance_score = ?,
+                    korea_relevance_score = ?, visa_or_labor_policy_score = ?, freshness_score = ?,
+                    source_reliability_score = ?, facebook_post_suitability_score = ?,
+                    selection_reason = ?, skip_reason = ?, duplicate_group_id = ?,
                     status = ?, collected_at = ?, published_at = ?
                 WHERE id = ?
                 """,
                 (
                     candidate.source_type,
                     candidate.source_url,
+                    candidate.source_name,
                     candidate.title,
                     candidate.summary,
                     candidate.content,
@@ -185,6 +221,14 @@ class NewsRepository:
                     candidate.risk_notes,
                     candidate.evaluation_score,
                     candidate.duplicate_risk_score,
+                    candidate.foreign_worker_relevance_score,
+                    candidate.korea_relevance_score,
+                    candidate.visa_or_labor_policy_score,
+                    candidate.freshness_score,
+                    candidate.source_reliability_score,
+                    candidate.facebook_post_suitability_score,
+                    candidate.selection_reason,
+                    candidate.skip_reason,
                     candidate.duplicate_group_id,
                     candidate.status,
                     candidate.collected_at,
@@ -233,9 +277,11 @@ class NewsRepository:
         try:
             rows = conn.execute(
                 """
-                SELECT id, source_type, source_url, title, summary, content, language, category,
+                SELECT id, source_type, source_url, source_name, title, summary, content, language, category,
                        keyword, hash_key, similarity_key, short_summary, key_points, relevance_reason,
-                       risk_notes, evaluation_score, duplicate_risk_score, duplicate_group_id,
+                       risk_notes, evaluation_score, duplicate_risk_score, foreign_worker_relevance_score,
+                       korea_relevance_score, visa_or_labor_policy_score, freshness_score, source_reliability_score,
+                       facebook_post_suitability_score, selection_reason, skip_reason, duplicate_group_id,
                        status, collected_at, published_at
                 FROM news_candidate
                 WHERE status = 'READY_TO_PUBLISH'
@@ -322,6 +368,7 @@ class NewsRepository:
             id=int(row["id"]),
             source_type=row["source_type"],
             source_url=row["source_url"] or "",
+            source_name=row["source_name"] or "",
             title=row["title"],
             summary=row["summary"] or "",
             content=row["content"] or "",
@@ -336,6 +383,14 @@ class NewsRepository:
             risk_notes=row["risk_notes"] or "",
             evaluation_score=float(row["evaluation_score"] or 0.0),
             duplicate_risk_score=float(row["duplicate_risk_score"] or 0.0),
+            foreign_worker_relevance_score=float(row["foreign_worker_relevance_score"] or 0.0),
+            korea_relevance_score=float(row["korea_relevance_score"] or 0.0),
+            visa_or_labor_policy_score=float(row["visa_or_labor_policy_score"] or 0.0),
+            freshness_score=float(row["freshness_score"] or 0.0),
+            source_reliability_score=float(row["source_reliability_score"] or 0.0),
+            facebook_post_suitability_score=float(row["facebook_post_suitability_score"] or 0.0),
+            selection_reason=row["selection_reason"] or "",
+            skip_reason=row["skip_reason"] or "",
             duplicate_group_id=row["duplicate_group_id"],
             status=status or row["status"],
             collected_at=row["collected_at"],

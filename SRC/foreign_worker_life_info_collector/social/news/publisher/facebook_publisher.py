@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 from ...facebook.page_client import FacebookPageClient
-from ...facebook.post_builder import build_text_post
+from ....utils.text_normalizer import normalize_plain_text
 from ..models import NewsCandidate
 
 FACEBOOK_PAGE_ID_ENV = "FACEBOOK_PAGE_ID"
@@ -17,11 +17,12 @@ class FacebookPublisher:
         self.client = client or FacebookPageClient()
 
     def build_message(self, candidate: NewsCandidate) -> str:
-        summary = candidate.short_summary or candidate.summary
+        summary = normalize_plain_text(candidate.short_summary or candidate.summary)
         parts = [
-            candidate.title,
+            normalize_plain_text(candidate.title),
             summary,
-            candidate.relevance_reason,
+            f"Source: {normalize_plain_text(candidate.source_name or candidate.source_type)}",
+            normalize_plain_text(candidate.selection_reason or candidate.relevance_reason),
             candidate.source_url,
             "#WorkConnectKorea #ForeignWorkersKorea",
         ]

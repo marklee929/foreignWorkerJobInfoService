@@ -44,13 +44,27 @@ class NewsPipeline:
         saved_candidates = [self.save_normalized(item, keyword) for item in collected_items]
         processed_candidates = [self.process_candidate(candidate) for candidate in saved_candidates]
         selected_candidates = self.auto_select(processed_candidates, limit=limit)
+        ready_snapshot = [candidate.to_dict() for candidate in selected_candidates]
         publish_results = [self.auto_publish(candidate, dry_run=dry_run) for candidate in selected_candidates]
+        final_candidates = self.repository.list_candidates()
         return {
             "dry_run": dry_run,
             "collected_count": len(collected_items),
-            "saved": [candidate.to_dict() for candidate in processed_candidates],
-            "ready_to_publish": [candidate.to_dict() for candidate in selected_candidates],
+            "saved_count": len(saved_candidates),
+            "duplicate_count": sum(1 for candidate in final_candidates if candidate.status == "DUPLICATE"),
+            "skipped_count": sum(1 for candidate in final_candidates if candidate.status == "SKIPPED"),
+            "selected_count": len(selected_candidates),
+            "saved": [candidate.to_dict() for candidate in final_candidates],
+            "ready_to_publish": ready_snapshot,
             "publish_results": publish_results,
+            "report": self.build_report(
+                dry_run=dry_run,
+                collected_count=len(collected_items),
+                saved_count=len(saved_candidates),
+                final_candidates=final_candidates,
+                selected_candidates=selected_candidates,
+                publish_results=publish_results,
+            ),
         }
 
     def collect(self, keyword: str) -> list[NewsItem]:
@@ -85,7 +99,17 @@ class NewsPipeline:
         evaluation = self.evaluator.evaluate(candidate)
         candidate.evaluation_score = evaluation.total_score
         candidate.duplicate_risk_score = evaluation.duplicate_risk_score
+        candidate.foreign_worker_relevance_score = evaluation.foreign_worker_relevance_score
+        candidate.korea_relevance_score = evaluation.korea_relevance_score
+        candidate.visa_or_labor_policy_score = evaluation.visa_or_labor_policy_score
+        candidate.freshness_score = evaluation.freshness_score
+        candidate.source_reliability_score = evaluation.source_reliability_score
+        candidate.facebook_post_suitability_score = evaluation.facebook_post_suitability_score
         candidate.status = evaluation.decision
+        if evaluation.decision == "READY_TO_PUBLISH":
+            candidate.selection_reason = evaluation.reason
+        else:
+            candidate.skip_reason = evaluation.reason
         candidate.risk_notes = _append_note(candidate.risk_notes, evaluation.reason)
         return self.repository.update_candidate(candidate)
 
@@ -114,7 +138,8 @@ class NewsPipeline:
         selected_ids = {candidate.id for candidate in selected}
         for candidate in ready[limit:]:
             candidate.status = "SKIPPED"
-            candidate.risk_notes = _append_note(candidate.risk_notes, "Skipped because a higher-scoring candidate was selected.")
+            candidate.skip_reason = "Skipped because a higher-scoring Korea-specific candidate was selected."
+            candidate.risk_notes = _append_note(candidate.risk_notes, candidate.skip_reason)
             self.repository.update_candidate(candidate)
         return [candidate for candidate in selected if candidate.id in selected_ids]
 
@@ -136,8 +161,9 @@ class NewsPipeline:
         )
 
         if status in ("DRY_RUN", "PUBLISHED"):
-            self.repository.mark_published(candidate.id, timestamp)
-            candidate.status = "PUBLISHED"
+            published_status = "DRY_RUN_PUBLISHED" if dry_run else "PUBLISHED"
+            self.repository.mark_status(candidate.id, published_status, published_at=timestamp)
+            candidate.status = published_status
             candidate.published_at = timestamp
         else:
             self.repository.mark_status(candidate.id, "FAILED")
@@ -158,8 +184,9 @@ class NewsPipeline:
             sent_at=utc_now_iso(),
         )
         if notify_result["status"] in ("DRY_RUN", "NOTIFIED"):
-            self.repository.mark_notified(candidate.id)
-            candidate.status = "NOTIFIED"
+            notified_status = "DRY_RUN_NOTIFIED" if dry_run else "NOTIFIED"
+            self.repository.mark_status(candidate.id, notified_status)
+            candidate.status = notified_status
 
         return {
             "news_candidate_id": candidate.id,
@@ -170,6 +197,51 @@ class NewsPipeline:
             "message": publish_result.get("message", ""),
             "error_message": error_message or notify_result.get("error_message", ""),
         }
+
+    def build_report(
+        self,
+        dry_run: bool,
+        collected_count: int,
+        saved_count: int,
+        final_candidates: list[NewsCandidate],
+        selected_candidates: list[NewsCandidate],
+        publish_results: list[dict],
+    ) -> str:
+        selected = selected_candidates[0] if selected_candidates else None
+        publish = publish_results[0] if publish_results else {}
+        lines = [
+            f"[WorkConnect News Automation - {'DRY RUN' if dry_run else 'REAL RUN'}]",
+            f"Collected: {collected_count}",
+            f"Saved: {saved_count}",
+            f"Duplicates: {sum(1 for item in final_candidates if item.status == 'DUPLICATE')}",
+            f"Skipped: {sum(1 for item in final_candidates if item.status == 'SKIPPED')}",
+            f"Selected: {len(selected_candidates)}",
+            "",
+            "Selected Candidate:",
+        ]
+        if selected:
+            lines.extend(
+                [
+                    f"- Title: {selected.title}",
+                    f"- Source: {selected.source_name or selected.source_type}",
+                    f"- Keyword: {selected.keyword}",
+                    f"- Score: {selected.evaluation_score:.2f}",
+                    f"- Reason: {selected.selection_reason}",
+                    f"- URL: {selected.source_url}",
+                ]
+            )
+        else:
+            lines.append("- None")
+        lines.extend(
+            [
+                "",
+                "Publish:",
+                f"- Facebook: {publish.get('facebook_status', 'N/A')}",
+                f"- Telegram: {publish.get('telegram_status', 'N/A')}",
+                f"- DB status: {publish.get('status', 'N/A')}",
+            ]
+        )
+        return "\n".join(lines)
 
     def _dry_run_seed_items(self, keyword: str) -> list[NewsItem]:
         return [
@@ -200,11 +272,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keyword", default="외국인 취업 비자", help="News search keyword.")
     parser.add_argument("--limit", type=int, default=1, help="Maximum candidates to publish in one cycle.")
     parser.add_argument("--dry-run", action="store_true", help="Run without external Facebook/Telegram calls.")
+    parser.add_argument("--json", action="store_true", help="Print full JSON output.")
+    parser.add_argument("--verbose", action="store_true", help="Print full JSON output.")
     args = parser.parse_args(argv)
 
     pipeline = NewsPipeline(repository=NewsRepository(Path(args.db)))
     result = pipeline.run(keyword=args.keyword, dry_run=args.dry_run, limit=args.limit)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if args.json or args.verbose:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(result["report"])
     return 0
 
 

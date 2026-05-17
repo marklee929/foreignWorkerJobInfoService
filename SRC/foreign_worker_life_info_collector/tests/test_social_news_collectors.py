@@ -18,7 +18,7 @@ RSS_XML = """<?xml version="1.0" encoding="UTF-8"?>
     <item>
       <title>외국인 취업 비자 정책 안내</title>
       <link>https://example.com/news/visa</link>
-      <description>외국인 근로자 취업 지원 정책</description>
+      <description>&lt;a href=&quot;https://example.com&quot;&gt;외국인 근로자&lt;/a&gt; &lt;font color=&quot;red&quot;&gt;취업 지원 정책&lt;/font&gt;</description>
     </item>
     <item>
       <title>무관한 소식</title>
@@ -43,6 +43,7 @@ class SocialNewsCollectorsTest(unittest.TestCase):
         self.assertEqual(items[0].title, "외국인 취업 비자 정책 안내")
         self.assertEqual(items[0].url, "https://example.com/news/visa")
         self.assertEqual(items[0].source, "rss")
+        self.assertEqual(items[0].summary, "외국인 근로자 취업 지원 정책")
 
     def test_google_collector_builds_rss_search_url(self) -> None:
         seen_urls: list[str] = []

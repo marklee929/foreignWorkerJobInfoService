@@ -199,6 +199,95 @@ python -m foreign_worker_life_info_collector.social.news.pipeline --db $db --dry
 - `news_performance_snapshot` 수집을 Facebook Graph API 기반으로 연결한다.
 - 실제 모드 검증은 로컬 환경변수와 비공개 `.env`를 준비한 뒤 공개 저장소에 값이 남지 않게 수행한다.
 
+## 2026-05-17 reporting/evaluation 정리
+
+### 변경 파일 목록
+
+- `run.bat`
+- `SRC/foreign_worker_life_info_collector/crew_team/social/news_bot.py`
+- `SRC/foreign_worker_life_info_collector/utils/text_normalizer.py`
+- `SRC/foreign_worker_life_info_collector/social/news/models.py`
+- `SRC/foreign_worker_life_info_collector/social/news/pipeline.py`
+- `SRC/foreign_worker_life_info_collector/social/news/normalizer/news_normalizer.py`
+- `SRC/foreign_worker_life_info_collector/social/news/evaluator/candidate_evaluator.py`
+- `SRC/foreign_worker_life_info_collector/social/news/publisher/facebook_publisher.py`
+- `SRC/foreign_worker_life_info_collector/social/news/notifier/telegram_notifier.py`
+- `SRC/foreign_worker_life_info_collector/social/news/repository/news_repository.py`
+- `SRC/foreign_worker_life_info_collector/social/news/collector/rss_news_collector.py`
+- `SRC/foreign_worker_life_info_collector/storage/db/migrations/schema.sql`
+- `SRC/foreign_worker_life_info_collector/tests/test_social_news_pipeline.py`
+- `SRC/foreign_worker_life_info_collector/tests/test_social_news_collectors.py`
+- `DOC/walkthrough/2026-05-17-news-automation.md`
+
+### 완료한 내용
+
+- `run.bat` 기본 실행 대상을 `crew_team.social.news_bot`으로 전환했다.
+- CLI 기본 출력은 전체 JSON dump가 아니라 compact execution report로 변경했다.
+- `--json` 또는 `--verbose` 옵션에서만 전체 JSON을 출력한다.
+- RSS/Google summary와 Facebook/Telegram 메시지에 남던 HTML tag를 plain text로 정리한다.
+- 제목 끝의 `- KBS 뉴스`, `- 뉴시스` 같은 source suffix를 `source_name`으로 분리한다.
+- evaluator에 `korea_relevance_score`, `visa_or_labor_policy_score`를 추가하고 H-1B/미국/Canada/Australia 등 비한국 비자 뉴스 감점을 추가했다.
+- `selection_reason`, `skip_reason`을 후보에 저장한다.
+- dry-run 상태를 `DRY_RUN_PUBLISHED`, `DRY_RUN_NOTIFIED`로 실제 게시 상태와 분리했다.
+- `ready_to_publish`는 publish 전 snapshot을 담도록 해 최종 notified 상태와 혼동되지 않게 했다.
+
+### 실행/검증 결과
+
+```powershell
+$env:PYTHONPATH='C:\WORK\foreign_worker_job_info\SRC'
+python -m unittest discover -s SRC\foreign_worker_life_info_collector\tests
+```
+
+결과: `Ran 8 tests in 0.180s`, `OK`
+
+```powershell
+$db = Join-Path $env:TEMP 'workconnect-report-check.db'
+Remove-Item -LiteralPath $db -ErrorAction SilentlyContinue
+.\run.bat --db $db
+```
+
+결과:
+
+```text
+[WorkConnect News Automation - DRY RUN]
+Collected: 2
+Saved: 2
+Duplicates: 1
+Skipped: 0
+Selected: 1
+
+Selected Candidate:
+- Title: 외국인 취업 비자 지원 정책 안내
+- Source: dry_run
+- Keyword: 외국인 취업 비자
+- Score: 0.86
+- Reason: Selected because it is relevant to foreign workers in Korea.
+- URL: https://example.com/workconnect/news/support-policy
+
+Publish:
+- Facebook: DRY_RUN
+- Telegram: DRY_RUN
+- DB status: DRY_RUN_NOTIFIED
+```
+
+DB 확인:
+
+- `news_candidate`: 2건
+- `facebook_publish_log`: 1건
+- `telegram_notify_log`: 1건
+- 상태 집계: `DRY_RUN_NOTIFIED` 1건, `DUPLICATE` 1건
+
+### 남은 문제
+
+- 실제 Google/Naver 수집 결과로 H-1B 뉴스가 한국 외국인 노동자 뉴스보다 낮게 선택되는지는 운영 데이터로 추가 검증이 필요하다.
+- `run.bat`는 기본 dry-run이며 실제 게시는 환경변수 설정 후 `--real`로만 실행한다.
+
+### 다음 작업 시작점
+
+- 운영 키워드 목록과 cycle runner를 추가한다.
+- 실제 수집 결과 샘플을 fixture로 저장하지 않는 방식으로 evaluator 회귀 테스트를 더 보강한다.
+- Facebook/Telegram 실제 모드는 비공개 로컬 환경변수로만 검증한다.
+
 ## 2026-05-17 legacy top-level wrapper 제거
 
 ### 변경 파일 목록

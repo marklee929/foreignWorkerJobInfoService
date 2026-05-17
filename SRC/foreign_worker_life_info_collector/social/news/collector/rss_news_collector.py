@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from html import unescape
 from typing import Callable
 from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
+from ....utils.text_normalizer import normalize_plain_text
 from ..models import NewsItem
 
 
@@ -27,7 +27,7 @@ def _default_fetch_text(url: str, timeout: int) -> str:
 
 def _child_text(element: ElementTree.Element, tag: str) -> str:
     child = element.find(tag)
-    return unescape((child.text or "").strip()) if child is not None else ""
+    return normalize_plain_text(child.text or "") if child is not None else ""
 
 
 class RSSNewsCollector:
