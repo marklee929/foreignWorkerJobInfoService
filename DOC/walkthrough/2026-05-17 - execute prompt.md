@@ -308,3 +308,321 @@ C:\WORK\foreign_worker_job_info
 - 다음 작업 시작점
 
 을 DOC/walkthrough 최신 날짜 문서에 업데이트하고 commit/push까지 해라.
+
+### 타임스탬프 수정내용 ###
+
+작업 대상:
+C:\WORK\foreign_worker_job_info\SRC\foreign_worker_life_info_collector
+
+먼저 git pull 후 아래 문서를 확인해라.
+- DOC/architecture/workflow-guide.md
+- DOC/architecture/collector-hierarchy.md
+- DOC/architecture/social-news-automation.md
+- DOC/walkthrough 최신 문서
+
+현재 문제:
+run.bat 실행 결과가 뉴스 운영 UI가 아니라 research/raw DB dump처럼 출력된다.
+뉴스 자동화 흐름은 일부 동작하지만, 출력/요약/후보선정/상태값이 운영용으로 부적합하다.
+
+현재 관찰된 문제:
+1. saved 후보 전체가 JSON으로 길게 출력된다.
+2. short_summary, key_points, telegram message에 HTML anchor tag가 그대로 들어간다.
+3. evaluator 점수가 대부분 동일해서 실제 best candidate 선정 근거가 약하다.
+4. WorkConnect의 핵심 대상은 “한국에서 일하는 외국인/외국인 노동자/비자/정착”인데, H-1B 같은 미국 취업비자 뉴스가 최상위로 선택된다.
+5. ready_to_publish 후보의 status가 NOTIFIED로 표시되어 상태 흐름이 혼동된다.
+6. 운영자가 봐야 하는 출력은 전체 raw row가 아니라 요약된 execution report여야 한다.
+
+이번 작업 목표:
+뉴스 자동화 파이프라인의 CLI/run.bat 출력, 요약 정제, 후보 평가 기준, 상태 흐름을 정리한다.
+실제 Facebook/Telegram API 호출은 dry-run에서는 하지 않는다.
+
+필수 변경 사항:
+
+1. CLI 출력 모드 분리
+기본 실행 출력은 compact report로 바꾼다.
+
+예시:
+
+[WorkConnect News Automation - DRY RUN]
+Collected: 10
+Saved: 10
+Duplicates: 0
+Skipped: 9
+Selected: 1
+
+Selected Candidate:
+- Title: [단독] 일 잘하면 혜택도 더 많이…외국인 취업비자 개편 - KBS 뉴스
+- Source: KBS 뉴스
+- Keyword: 외국인 취업 비자
+- Score: 0.91
+- Reason: 한국 내 외국인 취업비자 제도 개편과 직접 관련
+- URL: ...
+
+Publish:
+- Facebook: DRY_RUN
+- Telegram: DRY_RUN
+- DB status: PUBLISHED_DRY_RUN or DRY_RUN_NOTIFIED
+
+Full JSON dump는 기본 출력하지 않는다.
+필요하면 --json 또는 --verbose 옵션에서만 출력한다.
+
+2. HTML 제거
+summary, short_summary, key_points, telegram message, facebook message에서 HTML tag를 제거한다.
+Google News RSS summary의 <a>, <font> 태그를 strip하고 깨끗한 plain text로 변환한다.
+
+필요한 유틸 위치:
+utils/text_normalizer.py
+또는 social/news/normalizer/news_normalizer.py
+
+3. source name 추출
+title 끝의 "- KBS 뉴스", "- 뉴시스" 등 source를 별도 필드 source_name으로 분리한다.
+본문 메시지에는 source_name을 깔끔하게 표시한다.
+
+4. 한국 관련성 가중치 추가
+candidate_evaluator에 korea_relevance_score를 추가한다.
+
+강하게 가산:
+- 한국
+- Korea
+- 국내
+- 법무부
+- 고용노동부
+- 출입국
+- E-9
+- E-7
+- 고용허가제
+- 지역특화형 비자
+- 외국인 노동자
+- 외국인 근로자
+- 외국인 취업비자
+- 정주
+- 산업현장
+- 중소기업
+
+감점:
+- H-1B
+- 미국
+- US
+- Canada
+- Australia
+- 해외 취업
+- 한국과 직접 관련 없는 외국 비자 뉴스
+
+5. 평가 점수 다양화
+모든 후보가 같은 score를 받지 않도록 scoring을 조정한다.
+
+권장 점수:
+- foreign_worker_relevance_score
+- korea_relevance_score
+- visa_or_labor_policy_score
+- freshness_score
+- source_reliability_score
+- duplicate_risk_penalty
+- facebook_post_suitability_score
+
+6. best candidate 선정 근거 저장
+선택된 후보에는 selection_reason 필드를 저장한다.
+스킵된 후보에는 skip_reason을 저장한다.
+
+예:
+- selected because it directly discusses Korea foreign worker visa reform
+- skipped because a higher scoring Korea-specific visa article was selected
+- skipped because it is related to US H-1B, not Korea foreign worker support
+
+7. 상태값 정리
+dry-run과 실제 publish 상태를 분리한다.
+
+권장 상태:
+- CANDIDATE
+- NORMALIZED
+- SUMMARIZED
+- DUPLICATE
+- SKIPPED
+- READY_TO_PUBLISH
+- DRY_RUN_PUBLISHED
+- PUBLISHED
+- FAILED
+- DRY_RUN_NOTIFIED
+- NOTIFIED
+
+ready_to_publish 배열에는 READY_TO_PUBLISH 또는 DRY_RUN_PUBLISHED 직전 상태만 넣고,
+최종 notified 결과는 publish_results에만 표시하거나 상태 흐름을 명확히 한다.
+
+8. Telegram 메시지 정리
+Telegram dry-run 메시지는 아래처럼 plain text만 사용한다.
+
+[WorkConnect News Published - DRY RUN]
+Status: DRY_RUN_PUBLISHED
+Title: ...
+Source: ...
+Why selected: ...
+Summary: ...
+URL: ...
+
+승인/거절/보류 문구는 넣지 않는다.
+
+9. run.bat 역할 정리
+run.bat 기본 실행은 dry-run compact report를 보여준다.
+full JSON은 별도 옵션으로만 가능하게 한다.
+
+10. DB 저장 유지
+후보/news_candidate 저장, 중복 방지용 hash/similarity_key 저장, publish log 저장 구조는 유지한다.
+단, dry-run DB 파일/log 파일이 git에 올라가지 않게 확인한다.
+
+주의:
+- Spring 프로젝트 SRC/ForeignWorkerJobInfoService는 수정하지 않는다.
+- PyQLE-project는 수정하지 않는다.
+- 실제 토큰/API 키는 코드나 문서에 쓰지 않는다.
+- dry-run에서는 실제 Facebook/Telegram 호출하지 않는다.
+- 승인/거절/보류 플로우를 되살리지 않는다.
+
+완료 후:
+1. run.bat 실행 결과를 확인한다.
+2. 출력이 compact report인지 확인한다.
+3. HTML tag가 제거되었는지 확인한다.
+4. H-1B 같은 비한국 뉴스가 한국 관련 뉴스보다 우선 선택되지 않는지 확인한다.
+5. DOC/walkthrough 최신 날짜 문서에 변경 파일, 검증 결과, 남은 문제, 다음 작업을 기록한다.
+6. git status 확인 후 민감정보, DB, logs 파일이 포함되지 않았는지 확인한다.
+7. commit/push한다.
+
+커밋 메시지:
+Refine social news automation reporting and candidate 
+
+### 타임스탬프 수정내용 ###
+
+첨부한 stitch_korea_life_admin_hub.zip 안의 code.html, DESIGN.md, screen.png를 기준으로 현재 정적 HTML UI를 Vue 3 + Vite + Tailwind 프로젝트로 재구성해줘.
+
+요구사항:
+1. 기존 화면 디자인과 레이아웃은 최대한 유지한다.
+2. code.html의 단일 HTML 구조를 Vue 컴포넌트로 분리한다.
+3. 최소 컴포넌트 구조:
+   - App.vue
+   - components/Sidebar.vue
+   - components/Header.vue
+   - components/StatusCard.vue
+   - components/DataTable.vue
+   - components/BotMonitorCard.vue
+   - components/LogPanel.vue
+4. DESIGN.md의 색상, 타이포그래피, spacing, border-radius 기준을 Tailwind config에 반영한다.
+5. CDN 방식은 제거하고 npm 기반 Tailwind 설정으로 바꾼다.
+6. 화면 데이터는 우선 mock data로 구성한다.
+7. 추후 API 연동이 쉽도록 데이터 배열과 UI 렌더링을 분리한다.
+8. Composition API와 `<script setup>` 문법을 사용한다.
+9. 기존 HTML 안에 반복되는 UI는 재사용 가능한 컴포넌트로 정리한다.
+10. 결과물은 바로 `npm install && npm run dev`로 실행 가능해야 한다.
+
+목표:
+스티치에서 생성된 정적 관리자 대시보드를 실제 개발 가능한 Vue 프론트엔드 프로젝트 초안으로 전환하는 것. // 참조 material은 DOC/design에 ziip 파일로 있으니까 확인해주고 
+
+### 타임스탬프 수정내용 ###
+
+현재 Vue admin UI를 실제 실행 데이터와 연결하기 전에, 먼저 backend 코드 구조에 맞는 DB 테이블 설계를 진행해줘.
+
+참고 자료:
+- DOC/design 폴더 안의 stitch_korea_life_admin_hub.zip
+- Admin UI Process and Module Integration 문서
+- 현재 SRC/foreign_worker_life_info_collector 전체 코드
+
+작업 목표:
+현재 Python news/social pipeline, repository, CLI 실행 구조, Vue admin UI mock data를 모두 확인한 뒤, UI 운영에 필요한 기초 테이블과 실행/수집/게시/로그 테이블을 설계한다.
+
+필수 작업:
+1. 현재 코드에서 실제 저장소 계층을 확인한다.
+   - social/news/repository
+   - storage 관련 모듈
+   - pipeline.py
+   - models.py
+   - news_bot.py
+   - 기존 SQLite 사용 위치
+
+2. 현재 UI에서 필요한 데이터 항목을 확인한다.
+   - dashboardData.js
+   - App.vue
+   - components/*
+   - 상태 카드
+   - 봇 모니터
+   - 후보 테이블
+   - 로그 패널
+   - 모듈 on/off toggle 영역
+
+3. 코드 기준으로 필요한 테이블을 설계한다.
+   최소 포함:
+   - admin_module_config
+   - admin_runtime_config
+   - admin_env_status
+   - news_pipeline_cycle
+   - news_pipeline_step_log
+   - news_pipeline_error_log
+   - news_raw_item
+   - news_normalized_item
+   - news_candidate
+   - social_publish_log
+   - telegram_notify_log
+
+4. 각 테이블별로 다음을 작성한다.
+   - 테이블 목적
+   - 컬럼명
+   - 타입
+   - nullable 여부
+   - 기본값
+   - primary key
+   - foreign key
+   - index 필요 여부
+   - UI에서 사용되는 위치
+   - backend 코드에서 매핑될 위치
+
+5. SQLite 기준 DDL을 먼저 작성한다.
+   단, 추후 Oracle/PostgreSQL로 이전 가능하도록 컬럼명과 타입을 너무 SQLite 전용으로 설계하지 않는다.
+
+6. 초기 seed data를 작성한다.
+   최소 포함:
+   - collector.naver
+   - collector.google
+   - collector.rss
+   - step.normalize
+   - step.summarize
+   - step.duplicate_check
+   - step.llama_check
+   - step.candidate_evaluation
+   - publish.facebook
+   - notify.telegram
+
+7. UI 실행 전 기초 데이터 삽입 흐름을 만든다.
+   예:
+   - scripts/init_admin_db.py
+   - 또는 storage/init_schema.py
+   - 또는 기존 repository 구조에 맞는 migration/init 함수
+
+8. backend 강제 규칙을 반영한다.
+   - UI에서 비활성화한 모듈은 backend에서도 절대 실행하지 않는다.
+   - dry_run=true이면 외부 API 호출은 simulation만 수행한다.
+   - facebookPublish=false이면 FacebookPublisher.publish()를 호출하지 않는다.
+   - telegramNotify=false이면 Telegram notifier를 호출하지 않는다.
+   - llamaCheck=false이면 LLaMA checker를 호출하지 않는다.
+   - collector별 enabled=false이면 해당 collector는 collect() 호출하지 않는다.
+
+9. 결과 문서를 생성한다.
+   위치:
+   - DOC/design/admin_db_schema.md
+
+10. 가능하면 실제 적용 파일도 생성한다.
+   권장 위치:
+   - SRC/foreign_worker_life_info_collector/storage/schema.sql
+   - SRC/foreign_worker_life_info_collector/storage/seed_admin_config.sql
+   - SRC/foreign_worker_life_info_collector/scripts/init_admin_db.py
+
+주의사항:
+- 기존 코드와 충돌하지 않게 먼저 현재 repository 구조를 읽고 맞춰라.
+- 기존 DB 파일이나 운영 데이터는 삭제하지 마라.
+- .env, *.db, logs, node_modules, dist는 수정하거나 커밋 대상으로 포함하지 마라.
+- UI mock data를 바로 제거하지 말고, API 연결 전까지 fallback으로 유지한다.
+- 실제 Facebook/Telegram API 호출은 절대 추가하지 않는다.
+- 이번 작업은 테이블 설계와 초기화 구조까지만 진행한다.
+
+완료 기준:
+1. admin_db_schema.md에 전체 테이블 설계가 정리되어 있다.
+2. SQLite DDL이 작성되어 있다.
+3. 초기 seed SQL 또는 init script가 작성되어 있다.
+4. 현재 코드 구조 기준으로 어느 UI/API/파이프라인이 어느 테이블을 사용하는지 매핑되어 있다.
+5. `python scripts/init_admin_db.py` 또는 이에 준하는 명령으로 기초 테이블 생성과 seed 삽입이 가능하다.
+5. `python scripts/init_admin_db.py` 또는 이에 준하는 명령으로 기초 테이블 생성과 seed 삽입이 가능하다.
