@@ -17,7 +17,7 @@ class TelegramBotClient:
 
     def send_message(self, text: str) -> dict:
         token = os.getenv(TELEGRAM_BOT_TOKEN_ENV, "").strip()
-        chat_id = os.getenv(TELEGRAM_CHAT_ID_ENV, "").strip()
+        chat_id = os.getenv(TELEGRAM_CHAT_ID_ENV, "").strip() or os.getenv("TELEGRAM_OWNER_CHAT_ID", "").strip()
         if not token or not chat_id:
             return {
                 "status": "FAILED",

@@ -10,6 +10,7 @@ from foreign_worker_life_info_collector.social.news.collector.naver_news_collect
     NaverNewsCollector,
 )
 from foreign_worker_life_info_collector.social.news.collector.rss_news_collector import RSSNewsCollector
+from foreign_worker_life_info_collector.social.news.collector.article_text_extractor import ArticleMetadata
 
 
 RSS_XML = """<?xml version="1.0" encoding="UTF-8"?>
@@ -24,6 +25,32 @@ RSS_XML = """<?xml version="1.0" encoding="UTF-8"?>
       <title>무관한 소식</title>
       <link>https://example.com/news/other</link>
       <description>다른 기사</description>
+    </item>
+  </channel>
+</rss>
+"""
+
+GOOGLE_RSS_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>Korea visa reform - Example Daily</title>
+      <link>https://news.google.com/rss/articles/google-token?oc=5</link>
+      <source url="https://example.com">Example Daily</source>
+      <description>Korea announced employment visa support for foreign workers.</description>
+    </item>
+  </channel>
+</rss>
+"""
+
+GOOGLE_RSS_WITH_QUERY_URL_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>Korea foreign worker policy - Publisher</title>
+      <link>https://news.google.com/rss/articles/story?url=https%3A%2F%2Fpublisher.example%2Fnews%2Fkorea-worker-visa-2026&amp;oc=5</link>
+      <source url="https://publisher.example">Publisher</source>
+      <description>Korea foreign worker visa policy update.</description>
     </item>
   </channel>
 </rss>
@@ -59,6 +86,55 @@ class SocialNewsCollectorsTest(unittest.TestCase):
         self.assertIn("news.google.com/rss/search", seen_urls[0])
         self.assertIn("q=%EC%99%B8%EA%B5%AD%EC%9D%B8+%EC%B7%A8%EC%97%85", seen_urls[0])
         self.assertEqual(items[0].source, "google_news")
+
+    def test_google_rss_keeps_google_url_separate_and_rejects_publisher_root(self) -> None:
+        calls: list[str] = []
+
+        def fetch_article(url: str, _timeout: int) -> ArticleMetadata:
+            calls.append(url)
+            return ArticleMetadata(content="Should not be fetched")
+
+        collector = RSSNewsCollector(
+            feed_urls=["https://news.google.com/rss/search?q=korea"],
+            source="google_news",
+            fetch_text=lambda _url, _timeout: GOOGLE_RSS_XML,
+            fetch_article=fetch_article,
+        )
+
+        items = collector.collect(limit=1)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].url, "")
+        self.assertEqual(items[0].canonical_url, "")
+        self.assertTrue(items[0].google_news_url.startswith("https://news.google.com/rss/articles/"))
+        self.assertEqual(calls, [])
+
+    def test_google_rss_uses_resolved_article_url_and_fetches_content(self) -> None:
+        calls: list[str] = []
+
+        def fetch_article(url: str, _timeout: int) -> ArticleMetadata:
+            calls.append(url)
+            return ArticleMetadata(
+                content="Full article body for Korea foreign worker visa policy.",
+                canonical_url="https://publisher.example/news/korea-worker-visa-2026",
+                publisher_name="Publisher",
+            )
+
+        collector = RSSNewsCollector(
+            feed_urls=["https://news.google.com/rss/search?q=korea"],
+            source="google_news",
+            fetch_text=lambda _url, _timeout: GOOGLE_RSS_WITH_QUERY_URL_XML,
+            fetch_article=fetch_article,
+        )
+
+        items = collector.collect(limit=1)
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].url, "https://publisher.example/news/korea-worker-visa-2026")
+        self.assertEqual(items[0].canonical_url, "https://publisher.example/news/korea-worker-visa-2026")
+        self.assertTrue(items[0].google_news_url.startswith("https://news.google.com/rss/articles/"))
+        self.assertEqual(calls, ["https://publisher.example/news/korea-worker-visa-2026"])
+        self.assertIn("Full article body", items[0].content)
 
     def test_naver_collector_requires_credentials(self) -> None:
         old_client_id = os.environ.pop(NAVER_CLIENT_ID_ENV, None)

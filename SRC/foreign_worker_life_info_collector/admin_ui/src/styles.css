@@ -38,3 +38,19 @@
     @apply inline-flex items-center rounded-full px-sm py-[2px] text-[10px] font-bold uppercase;
   }
 }
+
+@layer utilities {
+  .px-xs {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+  .scrollbar-hidden {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .scrollbar-hidden::-webkit-scrollbar {
+    display: none;
+  }
+}

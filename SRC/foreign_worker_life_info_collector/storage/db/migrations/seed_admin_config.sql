@@ -9,8 +9,8 @@ VALUES
     ('step.duplicate_check', 'step', 'Duplicate Check', 'Apply deterministic duplicate checks using URL, title hash, similarity key, and recent posts.', TRUE, TRUE, 120, '{"deterministic":true}'),
     ('step.llama_check', 'step', 'Local LLaMA Check', 'Optional semantic duplicate/relevance advisory when LOCAL_LLAMA_ENDPOINT exists.', FALSE, FALSE, 130, '{"env_key":"LOCAL_LLAMA_ENDPOINT","advisory_only":true}'),
     ('step.candidate_evaluation', 'step', 'Candidate Evaluation', 'Score candidates by Korea relevance, foreign worker relevance, freshness, reliability, and suitability.', TRUE, TRUE, 140, '{"selector":"CandidateEvaluator"}'),
-    ('publish.facebook', 'publish', 'Facebook Publish', 'Publish selected news to Facebook Page only when real mode and env are valid.', FALSE, FALSE, 200, '{"dry_run_default":true}'),
-    ('notify.telegram', 'notify', 'Telegram Notify', 'Send publish result notification. This is not an approval channel.', FALSE, FALSE, 210, '{"approval_flow":false}')
+    ('publish.facebook', 'publish', 'Facebook Publish', 'Publish selected news to Facebook Page automatically when env is valid.', TRUE, FALSE, 200, '{"dry_run_default":false}'),
+    ('notify.telegram', 'notify', 'Telegram Notify', 'Send publish result notification. This is not an approval channel.', TRUE, FALSE, 210, '{"approval_flow":false}')
 ON CONFLICT (module_key) DO UPDATE SET
     module_group = EXCLUDED.module_group,
     module_name = EXCLUDED.module_name,
@@ -27,7 +27,7 @@ VALUES
     ('news.default_limit', '1', 'integer', FALSE, 'Maximum selected candidates per cycle.'),
     ('news.default_dry_run', 'true', 'boolean', FALSE, 'Dry-run is the default execution mode.'),
     ('ui.refresh_interval_seconds', '15', 'integer', FALSE, 'Suggested dashboard polling interval.'),
-    ('pipeline.real_publish_requires_ui_toggle', 'true', 'boolean', FALSE, 'Real publish requires explicit UI/admin activation.')
+    ('pipeline.real_publish_requires_ui_toggle', 'false', 'boolean', FALSE, 'Real publish runs automatically when the bot is enabled and env is valid.')
 ON CONFLICT (config_key) DO UPDATE SET
     config_value = EXCLUDED.config_value,
     value_type = EXCLUDED.value_type,

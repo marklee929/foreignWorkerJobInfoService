@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 WATCH_EXTENSIONS = {".py", ".sql"}
+WATCH_FILE_NAMES = {".env"}
 SKIP_DIR_NAMES = {
     "__pycache__",
     ".git",
@@ -30,7 +31,9 @@ def package_root() -> Path:
 
 def iter_watch_files(root: Path):
     for path in root.rglob("*"):
-        if not path.is_file() or path.suffix not in WATCH_EXTENSIONS:
+        if not path.is_file():
+            continue
+        if path.name not in WATCH_FILE_NAMES and path.suffix not in WATCH_EXTENSIONS:
             continue
         if any(part in SKIP_DIR_NAMES for part in path.parts):
             continue

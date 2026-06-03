@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from ..models import DataQualityScore, LifeServiceBusiness, RawSourceData
-from ..storage.db.sqlite_client import SQLiteDBWriter
 from .research.collector_bot import CollectorAgent
 from .research.normalizer_bot import NormalizerAgent
 from .research.verifier_bot import VerifierAgent
@@ -29,7 +28,7 @@ class ResearchManager:
         collector_agent: Optional[CollectorAgent] = None,
         normalizer_agent: Optional[NormalizerAgent] = None,
         verifier_agent: Optional[VerifierAgent] = None,
-        db_writer: Optional[SQLiteDBWriter] = None,
+        db_writer: Optional[Any] = None,
     ):
         self.collector_agent = collector_agent or CollectorAgent()
         self.normalizer_agent = normalizer_agent or NormalizerAgent()

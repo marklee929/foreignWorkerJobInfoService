@@ -1,113 +1,257 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
-import { Map, X } from '@lucide/vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { Cpu } from '@lucide/vue'
 import Sidebar from '../components/Sidebar.vue'
 import Header from '../components/Header.vue'
 import StatusCard from '../components/StatusCard.vue'
-import BotMonitorCard from '../components/BotMonitorCard.vue'
-import DataTable from '../components/DataTable.vue'
 import LogPanel from '../components/LogPanel.vue'
-import { categoryMix, emptySummary, navItems, runtimeConfig as baseRuntimeConfig } from '../data/defaultAdminState'
-import { fetchCandidates, fetchDashboardSummary, fetchLogs, fetchModules } from '../services/apiClient'
+import { emptySummary, navItems, runtimeConfig as baseRuntimeConfig } from '../data/defaultAdminState'
+import {
+  fetchBotStatus,
+  fetchCandidates,
+  fetchDashboardSummary,
+  fetchJobCollectorLogs,
+  fetchJobCollectorStatus,
+  fetchLlamaStatus,
+  fetchLogs,
+  fetchModules,
+  reconnectLlama,
+  resetBotError,
+  startBot,
+  startJobCollectorScheduler,
+  startLlama,
+  stopBot,
+  stopJobCollectorScheduler,
+  stopLlama,
+} from '../services/apiClient'
 import { logoutAdmin, resetDeviceId } from '../services/authService'
 
-const router = useRouter()
 const runtimeConfig = ref({ ...baseRuntimeConfig })
 const summary = ref({ ...emptySummary })
 const modules = ref([])
 const candidates = ref([])
 const logs = ref([])
+const jobLogs = ref([])
+const botStatus = ref({ status: 'STOPPED', label: '중지됨', lastErrorMessage: '' })
+const jobCollectorStatus = ref({ status: 'STOPPED', schedulerEnabled: false, latest: null, settings: {} })
+const llamaStatus = ref({ enabled: false, connected: false, endpoint: '-', model: '-', status: 'DISABLED', message: '로컬 LLaMA 비활성' })
 const loadError = ref('')
 const loading = ref(true)
+const botBusy = ref(false)
+const jobBusy = ref(false)
+const llamaBusy = ref(false)
 const dashboardLoaded = ref(false)
-
-const enabledModules = computed(() => modules.value.filter((module) => module.enabled))
-const disabledModules = computed(() => modules.value.filter((module) => !module.enabled))
+const loadingMoreLogs = ref(false)
+const hasMoreLogs = ref(true)
+const visibleLogCount = ref(10)
+const LOG_PAGE_SIZE = 10
+let refreshTimer = null
 
 const statusCards = computed(() => [
-  { label: '오늘 후보', value: String(summary.value.candidate_count || 0), delta: 'DB', tone: 'primary' },
-  { label: '게시 완료', value: String(summary.value.published_count || 0), delta: '테스트 우선', tone: 'neutral' },
-  { label: '중복', value: String(summary.value.duplicate_count || 0), delta: '검사됨', tone: 'neutral' },
-  { label: '활성 모듈', value: String(summary.value.enabled_module_count || 0), delta: `/${summary.value.module_count || 0}`, tone: 'secondary' },
-  { label: '비활성 모듈', value: String(summary.value.disabled_module_count || 0), delta: '호출 안 함', tone: 'tertiary' },
-  { label: '실패', value: String(summary.value.failed_count || 0), delta: '현재', tone: 'error' },
-  { label: 'DB 상태', value: runtimeConfig.value.apiConnected ? '준비됨' : '확인 중', delta: 'PostgreSQL', tone: 'neutral' },
-  { label: 'API', value: runtimeConfig.value.apiConnected ? '켜짐' : '확인 중', delta: loading.value ? '로딩 중' : '읽기 전용', tone: 'ai' },
+  { label: '전체 뉴스', value: String(summary.value.candidate_count || 0), delta: '수집', tone: 'primary' },
+  { label: '오늘 게시 대기', value: String(summary.value.today_ready_count || 0), delta: 'READY', tone: 'secondary' },
+  { label: '게시 완료', value: String(summary.value.published_count || 0), delta: '완료', tone: 'neutral' },
+  { label: '전날 만료', value: String(summary.value.previous_post_expired_count || 0), delta: 'POST_EXPIRED', tone: 'tertiary' },
+  { label: '게시 만료', value: String(summary.value.post_expired_count || 0), delta: '누적', tone: 'neutral' },
+  { label: '실패', value: String(summary.value.failed_count || 0), delta: '오류', tone: 'error' },
 ])
 
-const pipelineMetrics = computed(() => {
-  const required = modules.value.filter((module) => module.required)
-  const requiredEnabled = required.filter((module) => module.enabled)
-  const collectors = modules.value.filter((module) => module.group === 'collector')
-  const collectorsEnabled = collectors.filter((module) => module.enabled)
-  const publishEnabled = modules.value.some((module) => module.key === 'publish.facebook' && module.enabled)
-  const notifyEnabled = modules.value.some((module) => module.key === 'notify.telegram' && module.enabled)
+const publishStatusItems = computed(() => [
+  { label: '오늘 수집 기사', value: summary.value.today_article_count || 0 },
+  { label: '오늘 미게시 기사', value: summary.value.today_unposted_count || 0 },
+  { label: '평균 점수', value: Number(summary.value.avg_score || 0).toFixed(2) },
+  { label: '현재 threshold', value: summary.value.current_threshold || 50 },
+  { label: 'READY 후보', value: summary.value.ready_count || summary.value.today_ready_count || 0 },
+  { label: '재시도 후보', value: summary.value.retryable_count || 0 },
+  { label: '오늘 게시 완료', value: summary.value.posted_today_count || 0 },
+  { label: 'COOLDOWN', value: summary.value.cooldown_active ? '대기 중' : '게시 가능' },
+  { label: '다음 게시 가능', value: summary.value.next_publish_at || '-' },
+])
 
-  return [
-    {
-      label: '필수 단계',
-      value: `${requiredEnabled.length}/${required.length}`,
-      percent: required.length ? Math.round((requiredEnabled.length / required.length) * 100) : 0,
-      tone: 'success',
-    },
-    {
-      label: '활성 수집기',
-      value: `${collectorsEnabled.length}/${collectors.length}`,
-      percent: collectors.length ? Math.round((collectorsEnabled.length / collectors.length) * 100) : 0,
-      tone: 'primary',
-    },
-    { label: 'Facebook 게시', value: publishEnabled ? '켜짐' : '꺼짐', percent: publishEnabled ? 100 : 0, tone: publishEnabled ? 'success' : 'error' },
-    { label: 'Telegram 알림', value: notifyEnabled ? '켜짐' : '꺼짐', percent: notifyEnabled ? 100 : 0, tone: notifyEnabled ? 'success' : 'info' },
-  ]
-})
-
-const moduleRows = computed(() =>
-  modules.value.map((module) => ({
-    name: module.name,
-    domain: module.group,
-    status: module.enabled ? '활성' : '비활성',
-    job: module.description || '-',
-    count: module.enabled ? '준비됨' : '호출 안 함',
-    success: module.required ? '필수' : '선택',
-    fail: '0',
-    enabled: module.enabled,
-    required: module.required,
-  })),
-)
-
-const candidateRows = computed(() =>
-  candidates.value.map((candidate) => ({
+const recentCandidates = computed(() =>
+  candidates.value.slice(0, 8).map((candidate) => ({
+    id: candidate.id || candidate.title,
     category: candidate.category || '소셜 뉴스',
-    region: candidate.region || 'KR',
-    title: candidate.title,
+    title: candidate.title || '제목 없음',
     source: candidate.source_name || candidate.source_type || '-',
     score: Number(candidate.evaluation_score || 0).toFixed(2),
-    duplicate: candidate.status || '-',
-    llama: candidate.duplicate_risk_score ? Number(candidate.duplicate_risk_score).toFixed(2) : '꺼짐',
+    status: candidate.status || '대기',
+    facebookUrl: candidate.facebook_post_url || '',
   })),
 )
 
-const logRows = computed(() =>
-  logs.value.map((log) => ({
+const combinedLogRows = computed(() => {
+  const socialRows = logs.value.map((log) => ({
     time: log.time || '-',
-    bot: log.bot || '파이프라인',
+    bot: log.bot || '소셜 뉴스 봇',
     level: log.level || 'INFO',
     message: log.message || '',
-    id: log.id || '-',
+    id: `social-${log.id || log.time || log.message}`,
     latency: log.latency || '-',
-  })),
-)
+  }))
+  const jobRows = jobLogs.value.map((log) => {
+    const failed = Number(log.failedCount || 0)
+    const message = [
+      `채용정보 수집 ${log.status}`,
+      `수신 ${log.totalReceived || 0}건`,
+      `신규 ${log.insertedCount || 0}건`,
+      `업데이트 ${log.updatedCount || 0}건`,
+      `스킵 ${log.skippedCount || 0}건`,
+      failed ? `실패 ${failed}건` : '',
+      log.errorMessage || '',
+    ]
+      .filter(Boolean)
+      .join(' / ')
+    return {
+      time: log.endedAt || log.startedAt || '-',
+      bot: '채용정보 봇',
+      level: failed ? 'ERROR' : 'INFO',
+      message,
+      id: `job-${log.id}`,
+      latency: `${log.pageFrom || 1}-${log.pageTo || 1}`,
+    }
+  })
+  return [...socialRows, ...jobRows]
+    .sort((a, b) => String(b.time).localeCompare(String(a.time)))
+})
 
-async function loadDashboard() {
-  loading.value = true
+const logRows = computed(() => combinedLogRows.value.slice(0, visibleLogCount.value))
+const llamaActive = computed(() => llamaStatus.value.status === 'CONNECTED' || llamaStatus.value.status === 'STARTING')
+const llamaToggleLabel = computed(() => (llamaActive.value ? 'LLaMA 끄기' : 'LLaMA 켜기'))
+
+const botCards = computed(() => [
+  {
+    key: 'social-news',
+    name: '소셜 뉴스 봇',
+    description: '뉴스 수집, 요약, 게시',
+    status: botStatus.value.status,
+    active: botStatus.value.status === 'RUNNING' || botStatus.value.status === 'STARTING',
+    error: botStatus.value.status === 'ERROR',
+    busy: botBusy.value,
+    toggle: handleToggleBot,
+    detail: botStatus.value.lastErrorMessage || '운영 상태 확인 중',
+  },
+  {
+    key: 'job-collector',
+    name: '채용정보 봇',
+    description: '고용24/워크넷 수집',
+    status: jobCollectorStatus.value.status,
+    active: Boolean(jobCollectorStatus.value.schedulerEnabled) || jobCollectorStatus.value.status === 'RUNNING',
+    error: jobCollectorStatus.value.status === 'ERROR' || Boolean(jobCollectorStatus.value.lastErrorMessage),
+    busy: jobBusy.value,
+    toggle: handleToggleJobCollector,
+    detail: jobCollectorStatus.value.lastErrorMessage || `최근 수신 ${jobCollectorStatus.value.latest?.totalReceived ?? 0}건`,
+  },
+  { key: 'content-bot', name: '콘텐츠 생성 봇', description: '추가 예정', status: 'PLANNED', active: false, planned: true },
+  { key: 'lifestyle-bot', name: '생활정보 봇', description: '추가 예정', status: 'PLANNED', active: false, planned: true },
+  { key: 'immigration-bot', name: '출입국 봇', description: '추가 예정', status: 'PLANNED', active: false, planned: true },
+  { key: 'labor-bot', name: '노동정보 봇', description: '추가 예정', status: 'PLANNED', active: false, planned: true },
+])
+
+function normalizeBotPayload(payload) {
+  const labelMap = {
+    RUNNING: '실행 중',
+    STOPPED: '중지됨',
+    ERROR: '장애',
+    STARTING: '시작 중',
+    STOPPING: '종료 중',
+  }
+  const status = payload?.status || 'STOPPED'
+  return {
+    ...payload,
+    status,
+    label: labelMap[status] || payload?.label || status,
+  }
+}
+
+function llamaStatusLabel(status) {
+  const map = {
+    CONNECTED: '연결됨',
+    DISCONNECTED: '연결 안 됨',
+    STARTING: '시작 중',
+    STOPPING: '종료 중',
+    ERROR: '오류',
+    DISABLED: '비활성',
+  }
+  return map[status] || status || '확인 중'
+}
+
+function uniqueLogKey(log) {
+  return log.id || `${log.time || log.startedAt}-${log.message || log.status || ''}`
+}
+
+function mergeUniqueLogs(target, nextItems, prepend = false) {
+  const seen = new Set()
+  const merged = prepend ? [...nextItems, ...target.value] : [...target.value, ...nextItems]
+  target.value = merged.filter((item) => {
+    const key = uniqueLogKey(item)
+    if (seen.has(key)) {
+      return false
+    }
+    seen.add(key)
+    return true
+  }).slice(0, 120)
+}
+
+async function loadOperationalLogs({ reset = false } = {}) {
+  if (loadingMoreLogs.value) {
+    return
+  }
+  loadingMoreLogs.value = true
+  try {
+    if (reset) {
+      logs.value = []
+      jobLogs.value = []
+      visibleLogCount.value = LOG_PAGE_SIZE
+      hasMoreLogs.value = true
+    }
+    const [socialPage, jobPage] = await Promise.all([
+      fetchLogs({ limit: LOG_PAGE_SIZE, offset: logs.value.length }),
+      fetchJobCollectorLogs({ limit: LOG_PAGE_SIZE, offset: jobLogs.value.length }),
+    ])
+    mergeUniqueLogs(logs, socialPage)
+    mergeUniqueLogs(jobLogs, jobPage)
+    hasMoreLogs.value = socialPage.length === LOG_PAGE_SIZE || jobPage.length === LOG_PAGE_SIZE
+  } finally {
+    loadingMoreLogs.value = false
+  }
+}
+
+async function refreshLatestLogs() {
+  const [socialPage, jobPage] = await Promise.all([
+    fetchLogs({ limit: LOG_PAGE_SIZE, offset: 0 }),
+    fetchJobCollectorLogs({ limit: LOG_PAGE_SIZE, offset: 0 }),
+  ])
+  mergeUniqueLogs(logs, socialPage, true)
+  mergeUniqueLogs(jobLogs, jobPage, true)
+}
+
+async function handleLoadMoreLogs() {
+  if (loadingMoreLogs.value) {
+    return
+  }
+  if (!hasMoreLogs.value && visibleLogCount.value >= combinedLogRows.value.length) {
+    return
+  }
+  visibleLogCount.value += LOG_PAGE_SIZE
+  if (visibleLogCount.value >= combinedLogRows.value.length - 2 && hasMoreLogs.value) {
+    await loadOperationalLogs()
+  }
+}
+
+async function loadDashboard({ silent = false } = {}) {
+  if (!silent) {
+    loading.value = true
+  }
   loadError.value = ''
   try {
-    const [summaryPayload, modulePayload, candidatePayload, logPayload] = await Promise.all([
+    const [summaryPayload, modulePayload, candidatePayload, botPayload, llamaPayload, jobPayload] = await Promise.all([
       fetchDashboardSummary(),
       fetchModules(),
       fetchCandidates(),
-      fetchLogs(),
+      fetchBotStatus(),
+      fetchLlamaStatus(),
+      fetchJobCollectorStatus(),
     ])
     summary.value = { ...emptySummary, ...summaryPayload }
     runtimeConfig.value = {
@@ -115,31 +259,74 @@ async function loadDashboard() {
       apiConnected: true,
       database: summaryPayload.database || runtimeConfig.value.database,
     }
-    modules.value = modulePayload.map((module) => ({
-      key: module.module_key,
-      group: module.module_group,
-      name: module.module_name,
-      description: module.description,
-      enabled: Boolean(module.is_enabled),
-      required: Boolean(module.is_required),
-    }))
-    candidates.value = candidatePayload
-    logs.value = logPayload
+    modules.value = modulePayload
+    candidates.value = candidatePayload.items || candidatePayload
+    botStatus.value = normalizeBotPayload(botPayload)
+    llamaStatus.value = llamaPayload
+    jobCollectorStatus.value = jobPayload
+    if (!dashboardLoaded.value) {
+      await loadOperationalLogs({ reset: true })
+    } else {
+      await refreshLatestLogs()
+    }
     dashboardLoaded.value = true
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    if (message.includes('관리자 승인이 필요') || message.includes('접속 아이디가 허가')) {
-      router.replace('/auth')
+    if (message.includes('관리자 승인') || message.includes('접속 승인')) {
+      window.location.replace('/auth')
       return
     }
-    loadError.value = message
-    summary.value = { ...emptySummary }
-    modules.value = []
-    candidates.value = []
-    logs.value = []
+    loadError.value = '운영 데이터를 불러오지 못했습니다. 서버 상태를 확인해주세요.'
     runtimeConfig.value = { ...runtimeConfig.value, apiConnected: false }
   } finally {
     loading.value = false
+  }
+}
+
+async function handleToggleBot() {
+  botBusy.value = true
+  try {
+    if (botStatus.value.status === 'ERROR') {
+      botStatus.value = normalizeBotPayload(await resetBotError())
+    }
+    const payload = botStatus.value.status === 'RUNNING' || botStatus.value.status === 'STARTING' ? await stopBot() : await startBot()
+    botStatus.value = normalizeBotPayload(payload)
+    await loadDashboard({ silent: true })
+  } finally {
+    botBusy.value = false
+  }
+}
+
+async function handleToggleJobCollector() {
+  jobBusy.value = true
+  try {
+    if (jobCollectorStatus.value.schedulerEnabled) {
+      await stopJobCollectorScheduler()
+    } else {
+      await startJobCollectorScheduler()
+    }
+    await loadDashboard({ silent: true })
+  } finally {
+    jobBusy.value = false
+  }
+}
+
+async function handleReconnectLlama() {
+  llamaBusy.value = true
+  try {
+    llamaStatus.value = await reconnectLlama()
+  } finally {
+    llamaBusy.value = false
+  }
+}
+
+async function handleToggleLlama() {
+  llamaBusy.value = true
+  try {
+    llamaStatus.value = llamaActive.value ? await stopLlama() : await startLlama()
+    await loadDashboard({ silent: true })
+  } finally {
+    llamaBusy.value = false
   }
 }
 
@@ -152,163 +339,198 @@ async function handleLogout() {
   }
 }
 
-onMounted(loadDashboard)
+onMounted(() => {
+  loadDashboard()
+  refreshTimer = window.setInterval(() => loadDashboard({ silent: true }), 5000)
+})
+
+onBeforeUnmount(() => {
+  if (refreshTimer) {
+    window.clearInterval(refreshTimer)
+  }
+})
 </script>
 
 <template>
   <div class="min-h-screen bg-surface text-on-surface">
     <Sidebar :nav-items="navItems" @logout="handleLogout" />
-    <Header :runtime-config="runtimeConfig" @logout="handleLogout" />
+    <Header @logout="handleLogout" />
 
     <main class="ml-[240px] space-y-lg p-lg">
       <section v-if="loadError && dashboardLoaded" class="control-card border-error bg-error-container/30 p-md text-body-sm text-error">
-        서버 연결이 끊겼습니다. `run.bat` 실행 상태를 확인한 뒤 새로고침해주세요. {{ loadError }}
+        {{ loadError }}
       </section>
 
-      <section class="grid grid-cols-8 gap-gutter">
+      <section class="grid grid-cols-6 gap-gutter">
         <StatusCard v-for="card in statusCards" :key="card.label" :card="card" />
       </section>
 
-      <BotMonitorCard :pipeline-metrics="pipelineMetrics" :runtime-config="runtimeConfig" />
+      <section class="control-card overflow-hidden">
+        <div class="flex items-center border-b border-outline-variant bg-white px-md py-sm">
+          <div>
+            <h2 class="text-headline">게시기 상태</h2>
+            <p class="text-body-sm text-on-surface-variant">오늘 수집된 미게시 기사 전체를 기준으로 1시간마다 1건을 선택합니다.</p>
+          </div>
+        </div>
+        <div class="grid grid-cols-9 gap-sm p-md">
+          <div v-for="item in publishStatusItems" :key="item.label" class="rounded border border-outline-variant bg-surface-container-low p-sm">
+            <p class="text-label-caps text-on-surface-variant">{{ item.label }}</p>
+            <p class="mt-xs truncate text-body-md font-black">{{ item.value }}</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="control-card overflow-hidden">
+        <div class="flex items-center border-b border-outline-variant bg-white px-md py-sm">
+          <div>
+            <h2 class="text-headline">봇 상태</h2>
+            <p class="text-body-sm text-on-surface-variant">운영 봇은 ON/OFF만 제어하고, 추가 예정 봇은 자리만 표시합니다.</p>
+          </div>
+          <span class="ml-auto rounded bg-surface-container px-sm py-xs text-label-caps text-on-surface-variant">
+            {{ botCards.filter((bot) => bot.active).length }}개 활동 중
+          </span>
+        </div>
+
+        <div class="max-h-[220px] overflow-y-auto">
+          <div class="flex min-w-full gap-gutter overflow-x-auto p-md">
+            <article
+              v-for="bot in botCards"
+              :key="bot.key"
+              class="min-w-[260px] rounded border border-outline-variant bg-surface-container-low p-sm"
+            >
+              <div class="flex items-start justify-between gap-md">
+                <div class="min-w-0">
+                  <h3 class="truncate text-body-md font-black">{{ bot.name }}</h3>
+                  <p class="mt-xs truncate text-body-sm text-on-surface-variant">{{ bot.description }}</p>
+                </div>
+                <span
+                  class="shrink-0 rounded px-sm py-[2px] text-[10px] font-bold"
+                  :class="bot.error ? 'bg-error-container text-error' : bot.active ? 'bg-emerald-100 text-emerald-700' : 'bg-white text-on-surface-variant'"
+                >
+                  {{ bot.planned ? '추가 예정' : bot.active ? '활동 중' : '활동 안 함' }}
+                </span>
+              </div>
+
+              <div class="mt-md flex items-center justify-between">
+                <p class="min-w-0 truncate text-body-sm" :class="bot.error ? 'text-error' : 'text-on-surface-variant'">{{ bot.detail }}</p>
+                <button
+                  v-if="!bot.planned"
+                  class="relative h-8 w-16 shrink-0 rounded-full transition disabled:cursor-not-allowed disabled:opacity-60"
+                  :class="bot.active ? 'bg-success' : 'bg-outline'"
+                  type="button"
+                  :disabled="bot.busy"
+                  :aria-label="`${bot.name} 켜기 또는 끄기`"
+                  @click="bot.toggle"
+                >
+                  <span class="absolute top-1 h-6 w-6 rounded-full bg-white transition" :class="bot.active ? 'left-9' : 'left-1'"></span>
+                </button>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
 
       <section class="grid grid-cols-12 gap-gutter">
-        <div class="control-card col-span-8 p-md">
-          <div class="mb-md flex items-center">
-            <div>
-              <h2 class="text-headline">모듈 실행 정책</h2>
-              <p class="text-body-sm text-on-surface-variant">
-                화면은 `admin.module_config`를 읽고, 비활성 모듈은 백엔드 실행에서 호출하지 않습니다.
-              </p>
+        <section class="control-card col-span-4 self-start p-md">
+          <div class="mb-md flex items-start justify-between gap-md">
+            <div class="flex min-w-0 items-center gap-sm">
+              <Cpu class="text-primary" :size="20" />
+              <div class="min-w-0">
+                <h2 class="text-headline">로컬 LLaMA</h2>
+                <p class="mt-xs truncate text-body-sm text-on-surface-variant">{{ llamaStatus.message }}</p>
+              </div>
             </div>
-            <span class="ml-auto rounded bg-primary-fixed px-sm py-xs text-label-caps text-primary">
-              {{ enabledModules.length }}개 활성 / 전체 {{ modules.length }}개
+            <button
+              class="relative h-8 w-16 shrink-0 rounded-full transition disabled:cursor-not-allowed disabled:opacity-60"
+              :class="llamaActive ? 'bg-success' : 'bg-outline'"
+              type="button"
+              :disabled="llamaBusy"
+              :aria-label="llamaToggleLabel"
+              @click="handleToggleLlama"
+            >
+              <span class="absolute top-1 h-6 w-6 rounded-full bg-white transition" :class="llamaActive ? 'left-9' : 'left-1'"></span>
+            </button>
+          </div>
+
+          <div class="mb-md flex items-center justify-between rounded border border-outline-variant bg-surface-container-low px-sm py-xs">
+            <span class="text-label-caps text-on-surface-variant">전원</span>
+            <span class="text-body-sm font-black" :class="llamaActive ? 'text-success' : 'text-on-surface-variant'">
+              {{ llamaBusy ? '처리 중' : llamaActive ? 'ON' : 'OFF' }}
             </span>
           </div>
 
-          <div class="grid grid-cols-2 gap-gutter">
-            <div class="rounded border border-outline-variant p-md">
-              <h3 class="mb-sm text-label-caps text-success">활성 모듈</h3>
-              <ul v-if="enabledModules.length" class="space-y-xs text-body-sm">
-                <li v-for="module in enabledModules" :key="module.key" class="flex justify-between gap-md">
-                  <span class="font-bold">{{ module.key }}</span>
-                  <span class="text-on-surface-variant">{{ module.group }}</span>
-                </li>
-              </ul>
-              <p v-else class="text-body-sm text-on-surface-variant">데이터 없음</p>
+          <dl class="space-y-xs text-body-sm">
+            <div class="flex items-center justify-between gap-md rounded border border-outline-variant px-sm py-xs">
+              <dt class="text-on-surface-variant">상태</dt>
+              <dd class="font-bold">{{ llamaStatusLabel(llamaStatus.status) }}</dd>
             </div>
-            <div class="rounded border border-outline-variant p-md">
-              <h3 class="mb-sm text-label-caps text-error">비활성 모듈</h3>
-              <ul v-if="disabledModules.length" class="space-y-xs text-body-sm">
-                <li v-for="module in disabledModules" :key="module.key" class="flex justify-between gap-md">
-                  <span class="font-bold">{{ module.key }}</span>
-                  <span class="text-on-surface-variant">호출 안 함</span>
-                </li>
-              </ul>
-              <p v-else class="text-body-sm text-on-surface-variant">데이터 없음</p>
+            <div class="flex items-center justify-between gap-md rounded border border-outline-variant px-sm py-xs">
+              <dt class="text-on-surface-variant">모델</dt>
+              <dd class="truncate font-mono">{{ llamaStatus.model }}</dd>
             </div>
-          </div>
-        </div>
-
-        <aside class="control-card col-span-4 p-md">
-          <h2 class="mb-md text-headline">연결 상태</h2>
-          <dl class="space-y-sm text-body-sm">
-            <div class="flex justify-between"><dt>데이터베이스</dt><dd class="font-mono font-bold">{{ runtimeConfig.database }}</dd></div>
-            <div class="flex justify-between"><dt>스키마</dt><dd class="font-mono">{{ runtimeConfig.schemas.join(', ') }}</dd></div>
-            <div class="flex justify-between"><dt>API 어댑터</dt><dd :class="runtimeConfig.apiConnected ? 'text-success' : 'text-on-surface-variant'">{{ runtimeConfig.apiConnected ? '연결됨' : '확인 중' }}</dd></div>
-            <div class="flex justify-between"><dt>모드</dt><dd class="rounded bg-surface-container px-xs">{{ runtimeConfig.dryRun ? '테스트 실행' : '실행' }}</dd></div>
+            <div class="rounded border border-outline-variant px-sm py-xs">
+              <dt class="text-on-surface-variant">엔드포인트</dt>
+              <dd class="mt-xs truncate font-mono">{{ llamaStatus.endpoint }}</dd>
+            </div>
           </dl>
-          <button class="mt-md rounded border border-outline-variant px-md py-xs text-body-sm" type="button" @click="loadDashboard">
+
+          <div class="mt-md flex items-center gap-sm">
+            <button
+              class="rounded border border-outline-variant px-md py-xs text-body-sm disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+              :disabled="llamaBusy"
+              @click="handleReconnectLlama"
+            >
+              재연결
+            </button>
+            <span class="text-body-sm text-on-surface-variant">OFF 시 모델 메모리 해제 요청</span>
+          </div>
+        </section>
+
+        <div class="col-span-8">
+          <LogPanel :logs="logRows" :has-more="hasMoreLogs" :loading-more="loadingMoreLogs" @load-more="handleLoadMoreLogs" />
+        </div>
+      </section>
+
+      <section class="control-card overflow-hidden">
+        <div class="flex items-center border-b border-outline-variant bg-white px-md py-sm">
+          <div>
+            <h2 class="text-headline">최근 후보 기사</h2>
+            <p class="text-body-sm text-on-surface-variant">수집된 후보의 제목, 출처, 평가 점수, 처리 상태를 확인합니다.</p>
+          </div>
+          <button class="ml-auto rounded border border-outline-variant px-md py-xs text-body-sm" type="button" :disabled="loading" @click="loadDashboard()">
             새로고침
           </button>
-        </aside>
-      </section>
-
-      <DataTable title="DB 모듈 상태" :rows="moduleRows" type="module" />
-
-      <LogPanel :logs="logRows" />
-
-      <section class="grid grid-cols-12 gap-gutter">
-        <div class="control-card col-span-9 overflow-hidden">
-          <div class="flex gap-gutter border-b border-outline-variant bg-white p-md">
-            <label class="flex flex-col gap-xs text-label-caps text-on-surface-variant">
-              카테고리
-              <select class="w-36 rounded border border-outline-variant bg-white px-sm py-xs text-body-sm text-on-surface" disabled>
-                <option>소셜 뉴스</option>
-              </select>
-            </label>
-            <label class="flex flex-col gap-xs text-label-caps text-on-surface-variant">
-              지역
-              <select class="w-36 rounded border border-outline-variant bg-white px-sm py-xs text-body-sm text-on-surface" disabled>
-                <option>KR</option>
-              </select>
-            </label>
-            <label class="flex flex-col gap-xs text-label-caps text-on-surface-variant">
-              최소 점수
-              <select class="w-36 rounded border border-outline-variant bg-white px-sm py-xs text-body-sm text-on-surface" disabled>
-                <option>API 필터 대기</option>
-              </select>
-            </label>
-            <button class="mt-5 rounded bg-primary-fixed px-md py-xs text-body-sm font-bold text-primary opacity-60" disabled>필터</button>
-            <button class="mt-5 rounded bg-primary-container px-md py-xs text-body-sm font-bold text-white opacity-60" disabled>내보내기</button>
-          </div>
-          <DataTable :rows="candidateRows" />
         </div>
 
-        <aside class="control-card col-span-3 p-md">
-          <div class="mb-md flex items-center">
-            <h2 class="text-headline">선택된 후보</h2>
-            <X class="ml-auto" :size="20" />
-          </div>
-          <p class="mb-sm text-label-caps">데이터 출처</p>
-          <div class="mb-md h-36 overflow-hidden rounded border border-outline-variant bg-surface-container-low p-md text-body-sm text-on-surface-variant">
-            행은 `social_news.candidate`에서 불러옵니다. 테이블이 비어 있으면 후보 목록에 데이터 없음이 표시됩니다.
-          </div>
-          <p class="mb-sm text-label-caps">현재 상태</p>
-          <a class="mb-md block truncate text-body-sm font-bold text-primary" href="#">읽기 전용 API 연결됨</a>
-          <div class="rounded border border-secondary-fixed-dim bg-secondary-fixed/30 p-md text-body-sm text-secondary">
-            <p class="mb-xs font-bold">백엔드 보호</p>
-            <p>비활성 모듈은 UI뿐 아니라 백엔드에서도 차단해야 합니다.</p>
-          </div>
-          <button class="mt-lg w-full rounded bg-primary-container px-md py-sm text-body-sm font-bold text-white opacity-60" disabled>게시 결과 대기</button>
-        </aside>
-      </section>
-
-      <section class="grid grid-cols-12 gap-gutter">
-        <div class="control-card col-span-8 p-lg">
-          <div class="mb-md flex items-center">
-            <h2 class="text-headline">지역 데이터 분포</h2>
-            <div class="ml-auto flex gap-md text-[11px]">
-              <span><i class="mr-xs inline-block h-2 w-2 rounded-full bg-primary-container"></i>수집기</span>
-              <span><i class="mr-xs inline-block h-2 w-2 rounded-full bg-secondary-container"></i>파이프라인</span>
-              <span><i class="mr-xs inline-block h-2 w-2 rounded-full bg-tertiary-container"></i>채널</span>
-            </div>
-          </div>
-          <div class="flex h-[300px] items-center justify-center rounded border border-dashed border-outline-variant bg-surface-container-low text-center text-on-surface-variant">
-            <div>
-              <Map class="mx-auto mb-md text-outline" :size="72" />
-              <p class="text-headline">지역 후보 데이터가 아직 없습니다</p>
-              <p class="text-body-sm">파이프라인 행이 생성될 때까지 패널은 비어 있습니다.</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="control-card col-span-4 p-lg">
-          <h2 class="mb-lg text-headline">모듈 구성</h2>
-          <div class="space-y-md">
-            <div v-for="item in categoryMix" :key="item.label">
-              <div class="mb-xs flex justify-between text-body-sm font-bold">
-                <span>{{ item.label }}</span>
-                <span>{{ item.value }}%</span>
-              </div>
-              <div class="h-3 rounded-full bg-surface-container">
-                <div class="h-3 rounded-full" :class="item.color" :style="{ width: item.value + '%' }"></div>
-              </div>
-            </div>
-          </div>
-          <div class="mt-lg border-t border-outline-variant pt-lg text-body-md text-on-surface-variant">
-            기본 운영 모드는 읽기 전용이며 테스트 실행을 우선합니다.
-          </div>
-        </div>
+        <table class="w-full border-collapse text-left text-body-sm">
+          <thead class="bg-white text-label-caps text-on-surface-variant">
+            <tr>
+              <th class="px-md py-sm">분류</th>
+              <th class="px-md py-sm">제목</th>
+              <th class="px-md py-sm">출처</th>
+              <th class="px-md py-sm">점수</th>
+              <th class="px-md py-sm">Facebook</th>
+              <th class="px-md py-sm">상태</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="recentCandidates.length === 0" class="h-14 border-t border-outline-variant">
+              <td class="px-md text-center text-on-surface-variant" colspan="6">데이터 없음</td>
+            </tr>
+            <tr v-for="candidate in recentCandidates" :key="candidate.id" class="h-10 border-t border-outline-variant hover:bg-surface-container-low">
+              <td class="px-md">{{ candidate.category }}</td>
+              <td class="px-md font-bold">{{ candidate.title }}</td>
+              <td class="px-md text-on-surface-variant">{{ candidate.source }}</td>
+              <td class="px-md font-mono font-bold text-success">{{ candidate.score }}</td>
+              <td class="px-md">
+                <a v-if="candidate.facebookUrl" class="font-bold text-primary" :href="candidate.facebookUrl" target="_blank" rel="noreferrer">게시글</a>
+                <span v-else class="text-on-surface-variant">-</span>
+              </td>
+              <td class="px-md text-on-surface-variant">{{ candidate.status }}</td>
+            </tr>
+          </tbody>
+        </table>
       </section>
     </main>
   </div>

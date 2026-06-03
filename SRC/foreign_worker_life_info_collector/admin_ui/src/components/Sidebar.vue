@@ -10,8 +10,6 @@ defineProps({
     required: true,
   },
 })
-
-defineEmits(['logout'])
 </script>
 
 <template>
@@ -26,7 +24,7 @@ defineEmits(['logout'])
           <RouterLink
             :to="item.path"
             class="flex items-center gap-sm rounded-lg px-md py-sm text-label-caps transition"
-            :class="route.path === item.path ? 'bg-secondary-container text-white' : 'text-on-surface-variant hover:bg-surface-container-high'"
+            :class="route.path === item.path && route.path !== '/' ? 'bg-secondary-container text-white' : 'text-on-surface-variant hover:bg-surface-container-high'"
           >
             <component :is="item.icon" :size="18" />
             <span>{{ item.label }}</span>

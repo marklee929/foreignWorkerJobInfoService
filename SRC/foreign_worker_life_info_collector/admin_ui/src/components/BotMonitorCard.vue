@@ -1,61 +1,102 @@
 <script setup>
-import { Cpu, FileStack } from '@lucide/vue'
+import { computed } from 'vue'
+import { Cpu, Power, RotateCw } from '@lucide/vue'
 
-defineProps({
-  pipelineMetrics: {
-    type: Array,
-    required: true,
-  },
-  runtimeConfig: {
+const props = defineProps({
+  botStatus: {
     type: Object,
     required: true,
   },
+  llamaStatus: {
+    type: Object,
+    required: true,
+  },
+  busy: {
+    type: Boolean,
+    default: false,
+  },
 })
+
+defineEmits(['toggle-bot', 'reset-bot-error', 'reconnect-llama'])
+
+const llamaLabelMap = {
+  CONNECTED: '연결됨',
+  DISCONNECTED: '연결 안 됨',
+  STARTING: '시작 중',
+  ERROR: '오류',
+  DISABLED: '비활성',
+}
+
+const llamaStatusLabel = computed(() => llamaLabelMap[props.llamaStatus.status] || props.llamaStatus.status || '확인 중')
+const botIsRunning = computed(() => props.botStatus.status === 'RUNNING' || props.botStatus.status === 'STARTING')
+const botIsChanging = computed(() => props.busy || props.botStatus.status === 'STARTING' || props.botStatus.status === 'STOPPING')
 </script>
 
 <template>
   <section class="grid grid-cols-12 gap-gutter">
-    <div class="control-card col-span-4 p-md">
+    <div class="control-card col-span-5 p-md">
+      <div class="mb-md flex items-center gap-sm">
+        <Power class="text-primary" :size="20" />
+        <h2 class="text-headline">소셜 뉴스 봇 상태</h2>
+        <span
+          class="ml-auto rounded px-sm py-xs text-[10px] font-bold"
+          :class="botStatus.status === 'ERROR' ? 'bg-error-container text-error' : botIsRunning ? 'bg-emerald-100 text-emerald-700' : 'bg-surface-container text-on-surface-variant'"
+        >
+          {{ botStatus.status === 'ERROR' ? '장애 발생' : botStatus.label }}
+        </span>
+      </div>
+
+      <div class="flex items-center justify-between rounded border border-outline-variant bg-surface-container-low p-md">
+        <div>
+          <p class="text-body-sm text-on-surface-variant">소셜 뉴스 봇</p>
+          <p class="text-display font-black">{{ botStatus.label }}</p>
+        </div>
+        <button
+          class="relative h-8 w-16 rounded-full transition disabled:cursor-not-allowed disabled:opacity-60"
+          :class="botIsRunning ? 'bg-success' : 'bg-outline'"
+          type="button"
+          :disabled="botIsChanging"
+          @click="$emit('toggle-bot')"
+          aria-label="소셜 뉴스 봇 시작 또는 종료"
+        >
+          <span class="absolute top-1 h-6 w-6 rounded-full bg-white transition" :class="botIsRunning ? 'left-9' : 'left-1'"></span>
+        </button>
+      </div>
+
+      <p v-if="botStatus.lastErrorMessage" class="mt-md rounded border border-error bg-error-container/30 p-sm text-body-sm text-error">
+        마지막 오류: {{ botStatus.lastErrorMessage }}
+      </p>
+      <button v-if="botStatus.status === 'ERROR'" class="mt-md rounded border border-outline-variant px-md py-xs text-body-sm" type="button" @click="$emit('reset-bot-error')">
+        장애 초기화
+      </button>
+    </div>
+
+    <div class="control-card col-span-7 p-md">
       <div class="mb-md flex items-center gap-sm">
         <Cpu class="text-primary" :size="20" />
         <h2 class="text-headline">로컬 LLaMA</h2>
-        <span class="ml-auto rounded bg-surface-container px-sm py-xs text-[10px] font-bold text-on-surface-variant">설정 기반</span>
+        <span class="ml-auto rounded bg-surface-container px-sm py-xs text-[10px] font-bold text-on-surface-variant">
+          {{ llamaStatus.message }}
+        </span>
       </div>
-      <dl class="space-y-sm text-body-sm">
-        <div class="flex justify-between"><dt>모듈</dt><dd class="font-mono font-bold">step.llama_check</dd></div>
-        <div class="flex justify-between"><dt>엔드포인트</dt><dd class="font-mono">LOCAL_LLAMA_ENDPOINT</dd></div>
-        <div class="flex justify-between"><dt>정책</dt><dd class="font-mono text-primary">비활성 시 호출 안 함</dd></div>
-        <div class="flex justify-between"><dt>모드</dt><dd class="rounded bg-surface-container px-xs">{{ runtimeConfig.dryRun ? '테스트 실행' : '실행' }}</dd></div>
+      <dl class="grid grid-cols-2 gap-gutter text-body-sm">
+        <div class="rounded border border-outline-variant p-sm">
+          <dt class="text-on-surface-variant">상태</dt>
+          <dd class="font-bold">{{ llamaStatusLabel }}</dd>
+        </div>
+        <div class="rounded border border-outline-variant p-sm">
+          <dt class="text-on-surface-variant">모델</dt>
+          <dd class="font-mono">{{ llamaStatus.model }}</dd>
+        </div>
+        <div class="col-span-2 rounded border border-outline-variant p-sm">
+          <dt class="text-on-surface-variant">엔드포인트</dt>
+          <dd class="font-mono">{{ llamaStatus.endpoint }}</dd>
+        </div>
       </dl>
-      <div class="mt-md border-t border-outline-variant pt-md">
-        <p class="rounded border border-secondary-fixed-dim bg-secondary-fixed/30 px-sm py-xs text-body-sm text-secondary">
-          백엔드에서 해당 모듈을 활성화하기 전까지 외부 호출은 꺼져 있습니다.
-        </p>
-      </div>
-    </div>
-
-    <div class="control-card col-span-8 p-md">
-      <div class="mb-md flex items-center gap-sm">
-        <FileStack class="text-secondary" :size="20" />
-        <h2 class="text-headline">소셜 뉴스 파이프라인</h2>
-        <a class="ml-auto text-body-sm text-primary" href="#">읽기 전용 상태</a>
-      </div>
-      <div class="grid grid-cols-3 gap-gutter">
-        <div class="flex h-[88px] items-center justify-center rounded border border-outline-variant bg-surface-container-low text-center text-body-md">
-          수집 -> 정규화 -> 요약<br />-> 중복 검사 -> 평가 -> 게시
-        </div>
-        <div class="col-span-2 grid grid-cols-2 gap-gutter">
-          <div v-for="metric in pipelineMetrics" :key="metric.label" class="rounded border border-outline-variant p-sm">
-            <p class="mb-sm text-label-caps text-on-surface-variant">{{ metric.label }}</p>
-            <div class="flex items-center gap-sm">
-              <div class="h-2 flex-1 rounded-full bg-surface-container">
-                <div class="h-2 rounded-full" :class="metric.tone === 'error' ? 'bg-error' : metric.tone === 'primary' ? 'bg-primary-container' : 'bg-success'" :style="{ width: metric.percent + '%' }"></div>
-              </div>
-              <span class="font-mono text-mono-data font-bold" :class="metric.tone === 'error' ? 'text-error' : 'text-success'">{{ metric.value }}</span>
-            </div>
-          </div>
-        </div>
-      </div>
+      <button class="mt-md inline-flex items-center gap-xs rounded border border-outline-variant px-md py-xs text-body-sm" type="button" @click="$emit('reconnect-llama')">
+        <RotateCw :size="14" />
+        LLaMA 재연결
+      </button>
     </div>
   </section>
 </template>

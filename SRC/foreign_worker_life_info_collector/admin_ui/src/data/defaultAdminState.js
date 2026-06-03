@@ -1,28 +1,27 @@
 import {
   Activity,
-  Bot,
   BriefcaseBusiness,
   Database,
   FileText,
   Globe2,
   Network,
   Settings,
-  ShieldCheck,
   TrendingUp,
 } from '@lucide/vue'
 
 export const navItems = [
+  { label: '대시보드', icon: Activity, path: '/' },
+  { label: '콘텐츠 관리', icon: Database, path: '/content' },
   { label: '소셜 뉴스', icon: Network, path: '/social-news' },
+  { label: '채용정보', icon: BriefcaseBusiness, path: '/job-collector' },
   { label: '생활 정보', icon: FileText, path: '/lifestyle' },
   { label: '출입국', icon: Globe2, path: '/immigration' },
   { label: '노동', icon: BriefcaseBusiness, path: '/labor' },
   { label: '데이터 품질', icon: TrendingUp, path: '/data-quality' },
-  { label: '봇 운영', icon: Bot, path: '/bot-operations' },
+  { label: '시스템 설정', icon: Settings, path: '/system-settings' },
 ]
 
 export const runtimeConfig = {
-  defaultKeyword: 'foreign worker visa korea',
-  defaultLimit: 1,
   dryRun: true,
   apiConnected: false,
   database: 'foreign_worker_job_info',
@@ -31,7 +30,10 @@ export const runtimeConfig = {
 
 export const emptySummary = {
   candidate_count: 0,
+  today_ready_count: 0,
+  previous_post_expired_count: 0,
   published_count: 0,
+  post_expired_count: 0,
   duplicate_count: 0,
   failed_count: 0,
   module_count: 0,
@@ -41,17 +43,3 @@ export const emptySummary = {
   api_connected: false,
   database: 'foreign_worker_job_info',
 }
-
-export const categoryMix = [
-  { label: '수집기', value: 30, color: 'bg-primary-container' },
-  { label: '파이프라인 단계', value: 50, color: 'bg-secondary-container' },
-  { label: '게시', value: 10, color: 'bg-tertiary-container' },
-  { label: '알림', value: 10, color: 'bg-[#b4c5ff]' },
-]
-
-export const utilityActions = [
-  { label: '설정', icon: Settings },
-  { label: '감사', icon: ShieldCheck },
-  { label: '데이터', icon: Database },
-  { label: '상태', icon: Activity },
-]

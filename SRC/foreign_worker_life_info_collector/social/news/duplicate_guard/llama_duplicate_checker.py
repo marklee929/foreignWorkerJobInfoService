@@ -24,9 +24,13 @@ class LlamaDuplicateChecker:
         prompt = self._build_prompt(candidate, recent_candidates[:5])
         body = json.dumps(
             {
-                "model": os.getenv(LOCAL_LLAMA_MODEL_ENV, "local"),
+                "model": os.getenv(LOCAL_LLAMA_MODEL_ENV) or os.getenv("LOCAL_MODEL_GENERAL") or os.getenv("LOCAL_MODEL_MASTER") or "local",
                 "prompt": prompt,
                 "stream": False,
+                "think": False,
+                "format": "json",
+                "options": {"temperature": 0, "num_predict": 160, "num_ctx": 1024},
+                "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "30s"),
                 "options": {"temperature": 0},
             }
         ).encode("utf-8")
