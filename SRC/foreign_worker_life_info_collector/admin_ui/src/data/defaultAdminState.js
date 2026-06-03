@@ -13,7 +13,7 @@ export const navItems = [
   { label: '대시보드', icon: Activity, path: '/' },
   { label: '콘텐츠 관리', icon: Database, path: '/content' },
   { label: '소셜 뉴스', icon: Network, path: '/social-news' },
-  { label: '채용정보', icon: BriefcaseBusiness, path: '/job-collector' },
+  { label: '직업정보', icon: BriefcaseBusiness, path: '/occupation' },
   { label: '생활 정보', icon: FileText, path: '/lifestyle' },
   { label: '출입국', icon: Globe2, path: '/immigration' },
   { label: '노동', icon: BriefcaseBusiness, path: '/labor' },

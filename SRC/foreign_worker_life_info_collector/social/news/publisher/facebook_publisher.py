@@ -6,7 +6,7 @@ import os
 
 from ....utils.text_normalizer import normalize_plain_text
 from ...facebook.page_client import FacebookPageClient
-from ..collector.google_news_url_resolver import best_article_url, is_domain_root_url
+from ..collector.google_news_url_resolver import best_article_url, is_acceptable_source_url
 from ..models import NewsCandidate
 
 FACEBOOK_PAGE_ID_ENV = "FACEBOOK_PAGE_ID"
@@ -203,14 +203,10 @@ def _bullet_lines(value: str, limit: int) -> list[str]:
 
 def _publisher_url(candidate: NewsCandidate) -> str:
     preferred = best_article_url(candidate.source_url, candidate.canonical_url)
-    if preferred:
+    if is_acceptable_source_url(preferred):
         return preferred
     for value in (candidate.source_url, candidate.canonical_url):
         url = (value or "").strip()
-        if url and not is_domain_root_url(url):
-            return url
-    for value in (candidate.google_news_url,):
-        url = (value or "").strip()
-        if url:
+        if is_acceptable_source_url(url):
             return url
     return ""

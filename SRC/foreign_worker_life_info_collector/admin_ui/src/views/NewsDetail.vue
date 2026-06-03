@@ -1,11 +1,11 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ExternalLink, RefreshCw, RotateCcw } from '@lucide/vue'
+import { ArrowLeft, ExternalLink, RefreshCw, RotateCcw, Wrench } from '@lucide/vue'
 import Header from '../components/Header.vue'
 import Sidebar from '../components/Sidebar.vue'
 import { navItems } from '../data/defaultAdminState'
-import { fetchCandidateDetail, repostCandidate } from '../services/apiClient'
+import { cleanupCandidateLinks, fetchCandidateDetail, repostCandidate } from '../services/apiClient'
 import { logoutAdmin, resetDeviceId } from '../services/authService'
 
 const route = useRoute()
@@ -13,7 +13,9 @@ const router = useRouter()
 const detail = ref(null)
 const loading = ref(true)
 const loadError = ref('')
+const actionMessage = ref('')
 const reposting = ref(false)
+const cleaning = ref(false)
 
 const candidate = computed(() => detail.value?.candidate || {})
 const publishLogs = computed(() => detail.value?.publishLogs || [])
@@ -99,6 +101,22 @@ async function handleRepost() {
   }
 }
 
+async function handleCleanupLinks() {
+  if (!candidate.value.id || cleaning.value) return
+  cleaning.value = true
+  loadError.value = ''
+  actionMessage.value = ''
+  try {
+    const result = await cleanupCandidateLinks({ ids: [candidate.value.id], limit: 1 })
+    actionMessage.value = `링크/본문 정리 완료: URL ${result.resolved_url || 0}건, 본문 ${result.content_updated || 0}건, 점수 ${result.score_updated || 0}건, 실패 ${result.failed || 0}건`
+    await loadDetail()
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : '링크/본문 정리에 실패했습니다.'
+  } finally {
+    cleaning.value = false
+  }
+}
+
 async function handleLogout() {
   try {
     await logoutAdmin()
@@ -130,7 +148,16 @@ onMounted(loadDetail)
           <button
             class="inline-flex items-center gap-xs rounded border border-outline-variant px-md py-xs text-body-sm font-bold disabled:cursor-not-allowed disabled:opacity-40"
             type="button"
-            :disabled="reposting || Boolean(candidate.facebook_post_url)"
+            :disabled="loading || cleaning"
+            @click="handleCleanupLinks"
+          >
+            <Wrench :size="15" />
+            {{ cleaning ? '정리 중' : '링크/본문 정리' }}
+          </button>
+          <button
+            class="inline-flex items-center gap-xs rounded border border-outline-variant px-md py-xs text-body-sm font-bold disabled:cursor-not-allowed disabled:opacity-40"
+            type="button"
+            :disabled="reposting"
             @click="handleRepost"
           >
             <RotateCcw :size="15" />
@@ -141,6 +168,9 @@ onMounted(loadDetail)
 
       <section v-if="loadError" class="rounded border border-error bg-error-container/30 p-sm text-body-sm text-error">
         {{ loadError }}
+      </section>
+      <section v-if="actionMessage" class="rounded border border-success bg-success/10 p-sm text-body-sm text-success">
+        {{ actionMessage }}
       </section>
 
       <section v-if="loading" class="control-card p-lg text-body-sm text-on-surface-variant">
@@ -161,15 +191,15 @@ onMounted(loadDetail)
             <div class="grid gap-xs text-body-sm">
               <div v-if="candidate.google_news_url" class="flex flex-wrap items-center gap-sm">
                 <span class="w-24 font-bold text-on-surface-variant">Google URL</span>
-                <a class="text-primary underline" :href="candidate.google_news_url" target="_blank" rel="noreferrer">{{ candidate.google_news_url }}</a>
+                <a class="min-w-0 break-all text-primary underline" :href="candidate.google_news_url" target="_blank" rel="noreferrer">{{ candidate.google_news_url }}</a>
               </div>
               <div v-if="candidate.source_url" class="flex flex-wrap items-center gap-sm">
                 <span class="w-24 font-bold text-on-surface-variant">원문 URL</span>
-                <a class="text-primary underline" :href="candidate.source_url" target="_blank" rel="noreferrer">{{ candidate.source_url }}</a>
+                <a class="min-w-0 break-all text-primary underline" :href="candidate.source_url" target="_blank" rel="noreferrer">{{ candidate.source_url }}</a>
               </div>
               <div v-if="candidate.canonical_url" class="flex flex-wrap items-center gap-sm">
                 <span class="w-24 font-bold text-on-surface-variant">Canonical</span>
-                <a class="text-primary underline" :href="candidate.canonical_url" target="_blank" rel="noreferrer">{{ candidate.canonical_url }}</a>
+                <a class="min-w-0 break-all text-primary underline" :href="candidate.canonical_url" target="_blank" rel="noreferrer">{{ candidate.canonical_url }}</a>
               </div>
             </div>
             <div class="flex flex-wrap gap-sm">
@@ -242,7 +272,7 @@ onMounted(loadDetail)
         </section>
 
         <section class="grid grid-cols-[minmax(0,1fr)_420px] gap-md">
-          <article class="control-card space-y-md p-lg">
+          <article class="control-card min-w-0 space-y-md p-lg">
             <div>
               <h2 class="mb-xs text-headline">영문 요약</h2>
               <p class="whitespace-pre-wrap text-body-sm leading-6">{{ candidate.generated_summary_en || candidate.short_summary || candidate.summary || '저장된 영문 요약이 없습니다.' }}</p>
@@ -253,15 +283,15 @@ onMounted(loadDetail)
             </div>
             <div>
               <h2 class="mb-xs text-headline">최종 Facebook 게시 본문</h2>
-              <pre class="whitespace-pre-wrap rounded border border-outline-variant bg-surface-container-low p-md text-body-sm leading-6">{{ facebookMessage || '게시 본문 미리보기가 없습니다.' }}</pre>
+              <pre class="max-w-full whitespace-pre-wrap break-words rounded border border-outline-variant bg-surface-container-low p-md text-body-sm leading-6">{{ facebookMessage || '게시 본문 미리보기가 없습니다.' }}</pre>
             </div>
             <div>
               <h2 class="mb-xs text-headline">기사 원문</h2>
-              <p class="whitespace-pre-wrap text-body-sm leading-7">{{ candidate.content || '저장된 기사 본문이 없습니다. 일부 RSS/검색 결과는 원문 HTML 접근이 제한될 수 있습니다.' }}</p>
+              <p class="whitespace-pre-wrap break-words text-body-sm leading-7">{{ candidate.content || '저장된 기사 본문이 없습니다. 일부 RSS/검색 결과는 원문 HTML 접근이 제한될 수 있습니다.' }}</p>
             </div>
           </article>
 
-          <aside class="space-y-md">
+          <aside class="min-w-0 space-y-md">
             <section class="control-card p-md">
               <h2 class="mb-sm text-headline">평가</h2>
               <dl class="space-y-xs text-body-sm">

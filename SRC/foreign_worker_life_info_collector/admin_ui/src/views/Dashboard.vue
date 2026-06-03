@@ -92,7 +92,7 @@ const combinedLogRows = computed(() => {
   const jobRows = jobLogs.value.map((log) => {
     const failed = Number(log.failedCount || 0)
     const message = [
-      `채용정보 수집 ${log.status}`,
+      `직업정보 수집 ${log.status}`,
       `수신 ${log.totalReceived || 0}건`,
       `신규 ${log.insertedCount || 0}건`,
       `업데이트 ${log.updatedCount || 0}건`,
@@ -104,7 +104,7 @@ const combinedLogRows = computed(() => {
       .join(' / ')
     return {
       time: log.endedAt || log.startedAt || '-',
-      bot: '채용정보 봇',
+      bot: '직업정보 봇',
       level: failed ? 'ERROR' : 'INFO',
       message,
       id: `job-${log.id}`,
@@ -133,8 +133,8 @@ const botCards = computed(() => [
   },
   {
     key: 'job-collector',
-    name: '채용정보 봇',
-    description: '고용24/워크넷 수집',
+    name: '직업정보 봇',
+    description: '고용24 직업/직무 사전',
     status: jobCollectorStatus.value.status,
     active: Boolean(jobCollectorStatus.value.schedulerEnabled) || jobCollectorStatus.value.status === 'RUNNING',
     error: jobCollectorStatus.value.status === 'ERROR' || Boolean(jobCollectorStatus.value.lastErrorMessage),

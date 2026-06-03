@@ -97,14 +97,7 @@ class NewsPipeline:
                 no_publish_reason,
                 payload_json=json.dumps(self.selection_log_payload(selection), ensure_ascii=False),
             )
-            notification = self.telegram_notifier.notify_cooldown(cooldown, dry_run=dry_run)
-            self.repository.insert_telegram_log(
-                message=notification.get("message", ""),
-                status=notification.get("status", "FAILED"),
-                sent_at=utc_now_iso(),
-                error_message=notification.get("error_message", ""),
-            )
-            publish_results.append({"status": "WAITING_COOLDOWN", "facebook_status": "WAITING_COOLDOWN", "telegram_status": notification.get("status", "SKIPPED"), "error_message": no_publish_reason})
+            publish_results.append({"status": "WAITING_COOLDOWN", "facebook_status": "WAITING_COOLDOWN", "telegram_status": "SKIPPED", "error_message": no_publish_reason})
         elif not selected_candidates:
             skip_message = no_publish_reason or "게시 가능한 후보가 없습니다."
             self.repository.insert_pipeline_log(

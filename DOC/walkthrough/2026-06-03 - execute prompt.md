@@ -643,3 +643,435 @@ DUPLICATE가 807건인데 대표 후보가 거의 없다.
 - 대표 후보 점수를 그룹 전체 점수로 화면에 표시
 
 현재 DUPLICATE 807건을 대상으로 backfill해서 group별 대표 후보를 생성하고 재채점해줘.
+
+### 타임스탬프 수정내용 ###
+
+WorkConnect 관리자에 “직업정보” 파이프라인을 구축해줘.
+
+현재 프로젝트 상황:
+- 뉴스 자동수집/정규화/Facebook 게시 파이프라인은 어느 정도 동작하고 있다.
+- 채용정보 API는 기업회원 권한 문제로 잠시 보류 중이다.
+- 관리자 메뉴에 “노동” 메뉴가 있는데 의미가 불명확하다.
+- 고용24 Open API 키 세트 중 직무정보/직업정보 키가 존재한다.
+  - EMPLOYEE_24_OPEN_API_JOB_KEY
+  - EMPLOYEE_24_OPEN_API_OCCUPATION_KEY
+- 이 데이터는 실시간 채용공고가 아니라 직업/직무 사전 데이터로 사용할 예정이다.
+
+목표:
+기존 “노동” 메뉴를 “직업정보”로 변경하고, 고용24 직무정보/직업정보 API를 수집·저장·조회·검색할 수 있는 관리자 파이프라인을 만든다.
+이 파이프라인은 나중에 채용정보, 뉴스 콘텐츠, PDF 생성, GPT Connect, 다국어 검색어 매핑에 연결될 수 있어야 한다.
+
+중요:
+이번 작업은 채용공고 수집이 아니다.
+EMPLOYEE_24_OPEN_API_EMPLOYMENT_KEY는 사용하지 않는다.
+이번 작업에서는 JOB_KEY와 OCCUPATION_KEY만 사용한다.
+
+1. 관리자 메뉴 변경
+
+현재 “노동” 메뉴를 “직업정보”로 변경한다.
+
+메뉴 구조:
+
+직업정보
+- 대시보드
+- 직무정보
+- 직업정보
+- 검색어 매핑
+- 수집 로그
+
+기존 “노동”이라는 메뉴명은 더 이상 사용하지 않는다.
+라우터, 사이드바, 페이지 제목, breadcrumb도 모두 “직업정보” 기준으로 정리한다.
+
+2. 데이터 성격 정의
+
+직무정보 / 직업정보는 채용공고처럼 자주 변하는 데이터가 아니다.
+
+수집 주기:
+- 기본: 수동 실행
+- 선택: 주 1회 scheduler
+- 실시간/매시간 수집 금지
+
+목적:
+- 외국인 사용자가 직업명을 몰라도 검색할 수 있도록 지원
+- 영어/다국어 키워드와 한국 직업명 매핑
+- 채용공고 jobsCd/occupation code와 연결
+- 직업별 설명 콘텐츠/PDF 생성
+- GPT Connect에서 직업 설명 응답에 활용
+
+3. 환경변수
+
+.env.example 또는 설정 문서에 아래 값을 정리한다.
+
+EMPLOYEE_24_OPEN_API_JOB_KEY=
+EMPLOYEE_24_OPEN_API_OCCUPATION_KEY=
+
+주의:
+- 실제 키는 커밋하지 않는다.
+- 로그에 키 전체값 출력 금지
+- 마스킹 출력만 허용
+
+4. DB 설계
+
+PostgreSQL을 사용한다.
+SQLite 사용 금지.
+
+스키마는 기존 프로젝트 구조에 맞추되, 가능하면 아래 중 하나로 정리한다.
+- occupation
+- job_info
+- public
+- 또는 기존 social_news와 분리된 work_info/occupation_info 계열 스키마
+
+가능하면 social_news와 분리한다.
+뉴스 데이터가 아니기 때문이다.
+
+필요 테이블 예시:
+
+A. occupation.job_info
+- id
+- source
+- job_code
+- job_name_ko
+- job_name_en nullable
+- job_category_code nullable
+- job_category_name nullable
+- description_ko
+- description_en nullable
+- required_skills text nullable
+- related_keywords text nullable
+- raw_response jsonb
+- collected_at
+- updated_at
+- active_yn
+
+B. occupation.occupation_info
+- id
+- source
+- occupation_code
+- occupation_name_ko
+- occupation_name_en nullable
+- occupation_category_code nullable
+- occupation_category_name nullable
+- work_description_ko
+- work_description_en nullable
+- required_education nullable
+- required_certificates nullable
+- related_jobs text nullable
+- outlook text nullable
+- raw_response jsonb
+- collected_at
+- updated_at
+- active_yn
+
+C. occupation.keyword_mapping
+- id
+- language_code
+- external_keyword
+- normalized_keyword
+- keyword_type
+- job_code nullable
+- occupation_code nullable
+- mapped_name_ko nullable
+- mapped_name_en nullable
+- match_score
+- mapping_source
+- priority
+- active_yn
+- created_at
+- updated_at
+
+D. occupation.collect_log
+- id
+- collector_type
+  - JOB
+  - OCCUPATION
+- status
+  - STARTED
+  - SUCCESS
+  - PARTIAL_FAILED
+  - FAILED
+- requested_count
+- inserted_count
+- updated_count
+- skipped_count
+- failed_count
+- started_at
+- finished_at
+- error_message
+- request_params jsonb
+
+E. occupation.raw_api_response
+선택사항이지만 가능하면 추가:
+- id
+- collector_type
+- request_url_without_key
+- response_body
+- parsed_yn
+- collected_at
+- error_message
+
+5. API 수집기
+
+고용24 직무정보 API collector와 직업정보 API collector를 분리해서 구현한다.
+
+- JobInfoCollector
+- OccupationInfoCollector
+
+요구:
+- API 호출
+- 응답 파싱
+- raw response 저장
+- upsert 저장
+- 수집 로그 저장
+- 실패해도 전체 프로세스 죽이지 않음
+- 키 누락 시 명확한 오류 메시지
+- 수동 실행 가능
+- scheduler는 기본 OFF 또는 주 1회 옵션
+
+주의:
+- 아직 실제 응답 필드가 문서와 다를 수 있으므로 raw_response를 반드시 저장한다.
+- 필드가 없으면 null 허용
+- API 응답이 XML이면 XML 파싱 후 raw XML 또는 JSON 변환 결과를 저장
+- API 응답이 JSON이면 raw JSON 저장
+
+6. 관리자 API
+
+다음 관리자 API를 추가한다.
+
+GET /admin/occupation/dashboard
+- 직무정보 총 수
+- 직업정보 총 수
+- 검색어 매핑 총 수
+- 최근 수집 시간
+- 최근 수집 상태
+- 실패 건수
+
+GET /admin/occupation/jobs
+- 직무정보 목록
+- page, size
+- keyword
+- job_code
+- active_yn
+
+GET /admin/occupation/jobs/{id}
+- 직무정보 상세
+
+POST /admin/occupation/jobs/collect
+- 직무정보 수동 수집 실행
+
+GET /admin/occupation/occupations
+- 직업정보 목록
+- page, size
+- keyword
+- occupation_code
+- active_yn
+
+GET /admin/occupation/occupations/{id}
+- 직업정보 상세
+
+POST /admin/occupation/occupations/collect
+- 직업정보 수동 수집 실행
+
+GET /admin/occupation/keyword-mappings
+- 검색어 매핑 목록
+
+POST /admin/occupation/keyword-mappings
+- 검색어 매핑 생성
+
+PUT /admin/occupation/keyword-mappings/{id}
+- 검색어 매핑 수정
+
+POST /admin/occupation/keyword-mappings/generate
+- 기존 직무/직업정보를 기반으로 기본 검색어 매핑 생성
+
+GET /admin/occupation/collect-logs
+- 수집 로그 목록
+
+7. 관리자 화면
+
+직업정보 > 대시보드
+
+표시:
+- 직무정보 수
+- 직업정보 수
+- 검색어 매핑 수
+- 최근 직무정보 수집 시간
+- 최근 직업정보 수집 시간
+- 최근 수집 결과
+- 실패 로그
+
+버튼:
+- 직무정보 수집 실행
+- 직업정보 수집 실행
+- 검색어 매핑 자동 생성
+- 새로고침
+
+직업정보 > 직무정보
+
+목록:
+- job_code
+- job_name_ko
+- job_name_en
+- category
+- keyword count
+- active_yn
+- updated_at
+
+상세:
+- 코드
+- 이름
+- 설명
+- 관련 키워드
+- raw_response 보기
+- 연결된 검색어 매핑
+- 수정/비활성화
+
+직업정보 > 직업정보
+
+목록:
+- occupation_code
+- occupation_name_ko
+- occupation_name_en
+- category
+- related_jobs
+- active_yn
+- updated_at
+
+상세:
+- 코드
+- 이름
+- 하는 일
+- 필요 역량
+- 관련 직업
+- 전망
+- raw_response 보기
+- 연결된 검색어 매핑
+
+직업정보 > 검색어 매핑
+
+목록:
+- language_code
+- external_keyword
+- normalized_keyword
+- mapped_name_ko
+- mapped_name_en
+- job_code
+- occupation_code
+- match_score
+- active_yn
+- priority
+
+기능:
+- 생성
+- 수정
+- 비활성화
+- 검색
+- 언어 필터
+
+8. 검색어 매핑 기본 생성
+
+초기 자동 생성 규칙을 구현한다.
+
+한국어 직업명 기반:
+- job_name_ko
+- occupation_name_ko
+- category_name
+- related_keywords
+
+영어 기본 매핑은 rule/template 수준으로 시작한다.
+LLM 번역은 이번 작업에서 필수 아님.
+
+예시 seed mapping:
+- factory worker → 생산직
+- manufacturing → 제조업
+- welder → 용접원
+- welding → 용접
+- forklift driver → 지게차 운전원
+- packing → 포장원
+- cleaner → 청소원
+- caregiver → 요양보호사
+- construction worker → 건설 근로자
+- farm worker → 농업 근로자
+- kitchen assistant → 주방보조
+- hotel staff → 호텔 직원
+- CNC operator → CNC 조작원
+- machine operator → 기계 조작원
+
+매핑은 occupation.keyword_mapping에 저장한다.
+
+9. 향후 확장 고려
+
+이번 구현에서 실제 콘텐츠 생성/PDF 생성까지 하지 않는다.
+하지만 구조적으로 연결 가능하게 한다.
+
+후속 작업:
+- 직업 설명 PDF 생성
+- 직업별 Facebook 카드 콘텐츠 생성
+- 해외 관심글/댓글 수집 후 직업 매핑
+- GPT Connect에서 직업 질문 응답
+- 채용공고 jobsCd와 연결
+
+따라서 DB 필드와 API 응답에는 아래 확장성을 고려한다.
+- description_en
+- mapped keywords
+- related visa tags
+- related industry tags
+- content_ready_yn
+- last_content_generated_at
+
+단, 이번 작업에서 너무 많은 기능을 한 번에 만들지 말고, 수집/조회/검색어 매핑까지를 1차 완료 기준으로 한다.
+
+10. 로깅
+
+수집 실행마다 로그를 남긴다.
+
+필수 로그:
+- collector_type
+- started_at
+- finished_at
+- status
+- request_count
+- inserted_count
+- updated_count
+- skipped_count
+- failed_count
+- error_message
+
+키는 마스킹한다.
+
+11. 검증
+
+작업 완료 후 아래를 확인할 수 있어야 한다.
+
+DB:
+- 직무정보 row가 저장됨
+- 직업정보 row가 저장됨
+- raw_response가 저장됨
+- collect_log가 저장됨
+- keyword_mapping seed가 생성됨
+
+관리자:
+- 사이드바 “노동”이 “직업정보”로 변경됨
+- 직업정보 대시보드 접근 가능
+- 직무정보 목록/상세 접근 가능
+- 직업정보 목록/상세 접근 가능
+- 검색어 매핑 목록 접근 가능
+- 수동 수집 버튼 동작
+- 수집 로그 확인 가능
+
+API:
+- collect 실행 가능
+- 목록 페이징 가능
+- 상세 조회 가능
+- 검색 가능
+
+12. 작업 완료 후 알려줄 것
+
+- 수정한 파일 목록
+- 추가한 DB migration
+- 추가한 테이블
+- 추가한 관리자 API
+- 추가한 관리자 화면 경로
+- 수집 실행 방법
+- 수집 결과 확인 SQL
+- 검색어 매핑 생성 방법
+- 아직 구현하지 않은 후속 작업 목록

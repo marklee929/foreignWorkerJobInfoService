@@ -1,11 +1,11 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ChevronLeft, ChevronRight, RefreshCw, RotateCcw, Search, Trash2 } from '@lucide/vue'
+import { ChevronLeft, ChevronRight, RefreshCw, RotateCcw, Search, Trash2, Wrench } from '@lucide/vue'
 import Header from '../components/Header.vue'
 import Sidebar from '../components/Sidebar.vue'
 import { navItems } from '../data/defaultAdminState'
-import { deleteCandidates, fetchCandidates, repostCandidate } from '../services/apiClient'
+import { cleanupCandidateLinks, deleteCandidates, fetchCandidates, repostCandidate } from '../services/apiClient'
 import { logoutAdmin, resetDeviceId } from '../services/authService'
 
 const route = useRoute()
@@ -14,8 +14,10 @@ const rows = ref([])
 const selectedIds = ref(new Set())
 const loading = ref(false)
 const deleting = ref(false)
+const cleaning = ref(false)
 const repostingIds = ref(new Set())
 const loadError = ref('')
+const actionMessage = ref('')
 const searchText = ref('')
 const statusFilter = ref('')
 const includeDuplicates = ref(false)
@@ -201,11 +203,51 @@ async function handleDeleteSelected() {
   }
 }
 
+async function handleCleanupLinks() {
+  if (cleaning.value || loading.value) {
+    return
+  }
+  cleaning.value = true
+  loadError.value = ''
+  actionMessage.value = ''
+  try {
+    const result = await cleanupCandidateLinks({
+      ids: [...selectedIds.value],
+      search: searchText.value.trim(),
+      status: statusFilter.value,
+      includeDuplicates: includeDuplicates.value ? '1' : '0',
+      limit: selectedCount.value ? selectedCount.value : 50,
+    })
+    actionMessage.value = `링크/본문 정리 완료: 대상 ${result.target || 0}건, URL ${result.resolved_url || 0}건, 본문 ${result.content_updated || 0}건, 점수 ${result.score_updated || 0}건, 실패 ${result.failed || 0}건`
+    await loadRows()
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : '링크/본문 정리에 실패했습니다.'
+  } finally {
+    cleaning.value = false
+  }
+}
+
 function canRepost(item) {
+  if (!item?.id) {
+    return false
+  }
   const status = item.publish_status || item.status
+  const repostableStatuses = [
+    'READY_TO_PUBLISH',
+    'FAILED_PERMISSION',
+    'FAILED_REPOST_REQUIRED',
+    'FAILED_RETRYABLE',
+    'AUTO_RETRY_BLOCKED',
+    'POSTED',
+    'PUBLISHED',
+    'NOTIFIED',
+    'DRY_RUN_PUBLISHED',
+    'DRY_RUN_NOTIFIED',
+  ]
   return (
-    !item.facebook_post_url &&
-    ['FAILED_PERMISSION', 'FAILED_REPOST_REQUIRED', 'FAILED_RETRYABLE', 'READY_TO_PUBLISH'].includes(status)
+    repostableStatuses.includes(status) ||
+    Boolean(item.facebook_post_url) ||
+    Boolean(item.post_expired)
   )
 }
 
@@ -306,6 +348,15 @@ onMounted(loadRows)
           </div>
           <div v-if="isDataView" class="flex items-center gap-sm">
             <button
+              class="inline-flex items-center gap-xs rounded border border-outline-variant px-md py-xs text-body-sm font-bold disabled:cursor-not-allowed disabled:opacity-40"
+              type="button"
+              :disabled="loading || cleaning"
+              @click="handleCleanupLinks"
+            >
+              <Wrench :size="15" />
+              {{ cleaning ? '정리 중' : selectedCount ? `링크/본문 정리 ${selectedCount}건` : '링크/본문 정리' }}
+            </button>
+            <button
               class="inline-flex items-center gap-xs rounded border border-error px-md py-xs text-body-sm font-bold text-error disabled:cursor-not-allowed disabled:opacity-40"
               type="button"
               :disabled="selectedCount === 0 || deleting"
@@ -358,6 +409,9 @@ onMounted(loadRows)
 
           <section v-if="loadError" class="mb-md rounded border border-error bg-error-container/30 p-sm text-body-sm text-error">
             {{ loadError }}
+          </section>
+          <section v-if="actionMessage" class="mb-md rounded border border-success bg-success/10 p-sm text-body-sm text-success">
+            {{ actionMessage }}
           </section>
 
           <div class="overflow-hidden rounded border border-outline-variant bg-white">

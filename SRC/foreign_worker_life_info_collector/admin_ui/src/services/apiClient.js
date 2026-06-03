@@ -71,6 +71,10 @@ export async function repostCandidate(id) {
   return postJson('/api/social/news/candidates/repost', { id })
 }
 
+export async function cleanupCandidateLinks(payload = {}) {
+  return postJson('/api/social/news/candidates/cleanup-links', payload)
+}
+
 export async function fetchLogs(params = {}) {
   const payload = await getJson(withQuery('/api/logs/recent', params))
   return payload.items || []
@@ -114,6 +118,58 @@ export function fetchJobCollectorStatus() {
 
 export async function fetchJobPostings() {
   const payload = await getJson('/api/admin/job-postings')
+  return payload.items || []
+}
+
+export function fetchOccupationDashboard() {
+  return getJson('/api/admin/occupation/dashboard')
+}
+
+export function fetchOccupationJobs(params = {}) {
+  return getJson(withQuery('/api/admin/occupation/jobs', params))
+}
+
+export function fetchOccupationJobDetail(id) {
+  return getJson(`/api/admin/occupation/jobs/${id}`)
+}
+
+export function collectOccupationJobs(payload = {}) {
+  return postJson('/api/admin/occupation/jobs/collect', payload)
+}
+
+export function fetchOccupations(params = {}) {
+  return getJson(withQuery('/api/admin/occupation/occupations', params))
+}
+
+export function fetchOccupationDetail(id) {
+  return getJson(`/api/admin/occupation/occupations/${id}`)
+}
+
+export function collectOccupations(payload = {}) {
+  return postJson('/api/admin/occupation/occupations/collect', payload)
+}
+
+export function fetchKeywordMappings(params = {}) {
+  return getJson(withQuery('/api/admin/occupation/keyword-mappings', params))
+}
+
+export function createKeywordMapping(payload = {}) {
+  return postJson('/api/admin/occupation/keyword-mappings', payload)
+}
+
+export function updateKeywordMapping(id, payload = {}) {
+  return requestJson(`/api/admin/occupation/keyword-mappings/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function generateKeywordMappings() {
+  return postJson('/api/admin/occupation/keyword-mappings/generate')
+}
+
+export async function fetchOccupationCollectLogs(params = {}) {
+  const payload = await getJson(withQuery('/api/admin/occupation/collect-logs', params))
   return payload.items || []
 }
 

@@ -31,7 +31,11 @@ const router = createRouter({
     },
     {
       path: '/job-collector',
-      name: 'job-collector',
+      redirect: '/occupation',
+    },
+    {
+      path: '/occupation',
+      name: 'occupation',
       component: JobCollectorPage,
       meta: { requiresAuth: true },
     },
