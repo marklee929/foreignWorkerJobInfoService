@@ -6,7 +6,9 @@ import json
 import math
 import os
 import re
+from datetime import datetime, timezone
 
+from ..category_rotation import classify_candidate
 from ..models import CandidateEvaluation, NewsCandidate
 
 FOREIGN_WORKER_TERMS = (
@@ -140,6 +142,30 @@ NON_KOREA_TERMS = (
     "us immigration",
 )
 SPAM_TERMS = ("coupon", "casino", "lottery", "click here", "sponsored", "advertorial")
+NEGATIVE_INCIDENT_TERMS = (
+    "assault",
+    "attack",
+    "attacked",
+    "beaten",
+    "beating",
+    "violence",
+    "violent",
+    "outrage",
+    "murder",
+    "death",
+    "dead",
+    "injured",
+    "injury",
+    "abuse case",
+    "exploitation case",
+    "폭행",
+    "구타",
+    "사망",
+    "살해",
+    "분노",
+    "학대",
+    "피해",
+)
 RELIABLE_SOURCE_HINTS = (
     "go.kr",
     "moel",
@@ -166,6 +192,17 @@ class CandidateEvaluator:
         threshold_value = threshold if threshold is not None else self.publish_threshold
         sections = self._sections(candidate)
         text = " ".join(sections.values())
+        category_decision = classify_candidate(candidate)
+        candidate.content_category = category_decision.content_category
+        candidate.content_priority_group = category_decision.priority_group
+        candidate.settlement_relevance_score = category_decision.settlement_relevance_score
+        candidate.practical_value_score = category_decision.practical_value_score
+        candidate.content_potential_score = category_decision.content_potential_score
+        candidate.category_selection_reason = category_decision.reason
+        candidate.is_sensitive = category_decision.is_sensitive
+        candidate.review_required_reason = category_decision.review_required_reason
+        if not candidate.category or candidate.category in {"foreign_worker_news", "jobs", "foreign_worker_policy"}:
+            candidate.category = category_decision.content_category
 
         foreign_worker = self._term_score(sections, FOREIGN_WORKER_TERMS, 32)
         visa = self._term_score(sections, VISA_TERMS, 28)
@@ -174,10 +211,13 @@ class CandidateEvaluator:
         life = self._term_score(sections, LIFE_TERMS, 10)
         action = self._term_score(sections, ACTION_TERMS, 8)
         source = self._source_score(candidate)
-        freshness = 8.0 if candidate.collected_at else 4.0
+        freshness = self._freshness_score(candidate)
         title_signal = self._title_signal(candidate, sections)
         content_quality = self._content_quality_bonus(candidate)
         group_signal = self._group_signal_bonus(candidate)
+        settlement = category_decision.settlement_relevance_score * 12
+        practical = category_decision.practical_value_score * 10
+        content_potential = category_decision.content_potential_score * 5
         penalty = self._penalty(candidate, text)
         duplicate_penalty = self._duplicate_penalty(candidate)
 
@@ -193,12 +233,18 @@ class CandidateEvaluator:
             + title_signal
             + content_quality
             + group_signal
+            + settlement
+            + practical
+            + content_potential
             - penalty
             - duplicate_penalty
         )
         score = max(0.0, min(100.0, raw_score))
         disallowed = self._hard_block(candidate, text, score)
-        decision = "READY_TO_PUBLISH" if not disallowed and score >= threshold_value and candidate.duplicate_risk_score < 0.85 else "SKIPPED"
+        if category_decision.is_sensitive:
+            decision = "REVIEW_REQUIRED"
+        else:
+            decision = "READY_TO_PUBLISH" if not disallowed and score >= threshold_value and candidate.duplicate_risk_score < 0.85 else "SKIPPED"
         reason = disallowed or self._reason(decision, score, threshold_value)
         breakdown = {
             "foreign_worker": foreign_worker,
@@ -212,6 +258,11 @@ class CandidateEvaluator:
             "title_signal": title_signal,
             "content_quality": content_quality,
             "group_signal": group_signal,
+            "settlement": round(settlement, 2),
+            "practical": round(practical, 2),
+            "content_potential": round(content_potential, 2),
+            "content_category": category_decision.content_category,
+            "content_priority_group": category_decision.priority_group,
             "penalty": penalty,
             "duplicate_penalty": duplicate_penalty,
             "threshold": threshold_value,
@@ -229,6 +280,11 @@ class CandidateEvaluator:
             content_clarity_score=round(self._content_clarity(candidate), 4),
             facebook_post_suitability_score=round(self._facebook_suitability(candidate), 4),
             decision=decision,
+            settlement_relevance_score=category_decision.settlement_relevance_score,
+            practical_value_score=category_decision.practical_value_score,
+            content_potential_score=category_decision.content_potential_score,
+            is_sensitive=category_decision.is_sensitive,
+            review_required_reason=category_decision.review_required_reason,
             reason=reason,
             threshold=threshold_value,
             score_breakdown_json=json.dumps(breakdown, ensure_ascii=False),
@@ -315,8 +371,12 @@ class CandidateEvaluator:
             penalty += 30
         if any(term in text for term in SPAM_TERMS):
             penalty += 35
+        if any(term in text for term in NEGATIVE_INCIDENT_TERMS):
+            penalty += 55
         if not candidate.source_url:
             penalty += 25
+        if has_korean_text(candidate.generated_summary_en, max_hangul_chars=6) or has_korean_text(candidate.generated_why_it_matters_en, max_hangul_chars=6):
+            penalty += 60
         if not (candidate.source_name or candidate.publisher_name):
             penalty += 6
         if len(candidate.title) > 180:
@@ -327,16 +387,53 @@ class CandidateEvaluator:
 
     def _hard_block(self, candidate: NewsCandidate, text: str, score: float) -> str:
         if not candidate.source_url:
-            return "원문 링크가 없어 게시할 수 없습니다."
+            return "Article URL is missing."
         if not candidate.title:
-            return "제목이 없어 게시할 수 없습니다."
+            return "Title is missing."
+        if candidate.is_sensitive:
+            return candidate.review_required_reason or "Sensitive article requires manual review."
+        if has_korean_text(candidate.generated_summary_en, max_hangul_chars=6) or has_korean_text(candidate.generated_why_it_matters_en, max_hangul_chars=6):
+            return "Generated Facebook summary contains Korean text; English-only posts are required."
+        if any(term in text for term in NEGATIVE_INCIDENT_TERMS):
+            return "Negative incident/crime article is not suitable for automatic Facebook publishing."
+        if self._candidate_age_hours(candidate) > 24:
+            return "Candidate is older than the rolling 24-hour publishing window."
         if score < self.min_safety_score:
-            return f"최소 안전 점수 {self.min_safety_score:.0f}점 미만으로 게시하지 않습니다."
-        if not any(term in text for term in FOREIGN_WORKER_TERMS + VISA_TERMS + LABOR_TERMS):
-            return "외국인 근로자, 비자, 취업, 노동 정보와의 직접 관련성이 부족합니다."
+            return f"Below minimum safety score {self.min_safety_score:.0f}."
+        practical_life_candidate = (
+            candidate.content_priority_group in {"SECONDARY", "TERTIARY"}
+            and candidate.settlement_relevance_score >= 0.25
+            and candidate.practical_value_score >= 0.15
+        )
+        if not practical_life_candidate and not any(term in text for term in FOREIGN_WORKER_TERMS + VISA_TERMS + LABOR_TERMS):
+            return "Not directly related to foreign workers, visas, jobs, or labor in Korea."
         if any(term in text for term in SPAM_TERMS):
-            return "광고 또는 스팸성 표현이 포함되어 게시하지 않습니다."
+            return "Advertising or spam-like text is present."
         return ""
+
+    def _freshness_score(self, candidate: NewsCandidate) -> float:
+        age_hours = self._candidate_age_hours(candidate)
+        if age_hours <= 6:
+            return 8.0
+        if age_hours <= 12:
+            return 6.0
+        if age_hours <= 24:
+            return 3.0
+        if age_hours <= 48:
+            return -10.0
+        return -25.0
+
+    def _candidate_age_hours(self, candidate: NewsCandidate) -> float:
+        if not candidate.collected_at:
+            return 9999.0
+        try:
+            value = candidate.collected_at.replace("Z", "+00:00")
+            collected_at = datetime.fromisoformat(value)
+            if collected_at.tzinfo is None:
+                collected_at = collected_at.replace(tzinfo=timezone.utc)
+            return max(0.0, (datetime.now(timezone.utc) - collected_at.astimezone(timezone.utc)).total_seconds() / 3600)
+        except Exception:
+            return 9999.0
 
     def _content_clarity(self, candidate: NewsCandidate) -> float:
         text = candidate.content or candidate.short_summary or candidate.summary or candidate.title
@@ -370,6 +467,15 @@ def normalize_text(value: str) -> str:
     text = text.replace("’", "'").replace("‘", "'").replace("–", "-").replace("—", "-")
     text = re.sub(r"\s+", " ", text)
     return f" {text.strip()} "
+
+
+def has_korean_text(value: str, max_hangul_chars: int = 6) -> bool:
+    text = value or ""
+    hangul = sum(1 for char in text if "\uac00" <= char <= "\ud7a3")
+    if hangul > max_hangul_chars:
+        return True
+    letters = sum(1 for char in text if char.isalpha())
+    return letters > 0 and hangul / max(letters, 1) > 0.08
 
 
 def count_matches(text: str, terms: tuple[str, ...]) -> int:

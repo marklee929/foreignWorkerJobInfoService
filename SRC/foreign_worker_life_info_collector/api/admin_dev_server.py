@@ -63,7 +63,7 @@ def changed_paths(previous: dict[Path, int], current: dict[Path, int]) -> list[P
 
 def start_server(server_args: list[str]) -> subprocess.Popen:
     command = [sys.executable, "-m", "foreign_worker_life_info_collector.api.admin_server", *server_args]
-    print("[admin-dev] API 서버 시작:", " ".join(command), flush=True)
+    print("[admin-dev] Starting API server:", " ".join(command), flush=True)
     return subprocess.Popen(command, cwd=Path.cwd(), env=os.environ.copy())
 
 
@@ -86,14 +86,14 @@ def main(argv: list[str] | None = None) -> int:
     root = package_root()
     previous = snapshot(root)
     process = start_server(server_args)
-    print(f"[admin-dev] 변경 감시 중: {root}", flush=True)
+    print(f"[admin-dev] Watching for changes: {root}", flush=True)
 
     try:
         while True:
             time.sleep(args.reload_interval)
             exit_code = process.poll()
             if exit_code is not None:
-                print(f"[admin-dev] API 서버가 종료되었습니다. exit={exit_code}. 재시작합니다.", flush=True)
+                print(f"[admin-dev] API server exited with code {exit_code}. Restarting.", flush=True)
                 process = start_server(server_args)
                 previous = snapshot(root)
                 continue
@@ -101,16 +101,16 @@ def main(argv: list[str] | None = None) -> int:
             current = snapshot(root)
             changed = changed_paths(previous, current)
             if changed:
-                print("[admin-dev] 파일 변경 감지. API 서버를 재시작합니다.", flush=True)
+                print("[admin-dev] File change detected. Restarting API server.", flush=True)
                 for path in changed[:5]:
                     print(f"[admin-dev] - {path.relative_to(root)}", flush=True)
                 if len(changed) > 5:
-                    print(f"[admin-dev] - 외 {len(changed) - 5}개", flush=True)
+                    print(f"[admin-dev] - and {len(changed) - 5} more", flush=True)
                 stop_server(process)
                 process = start_server(server_args)
                 previous = snapshot(root)
     except KeyboardInterrupt:
-        print("[admin-dev] 종료 요청을 받았습니다.", flush=True)
+        print("[admin-dev] Stop requested.", flush=True)
     finally:
         stop_server(process)
     return 0

@@ -1,11 +1,11 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, ExternalLink, RefreshCw, RotateCcw, Wrench } from '@lucide/vue'
+import { ArrowLeft, ExternalLink, RefreshCw, Wrench } from '@lucide/vue'
 import Header from '../components/Header.vue'
 import Sidebar from '../components/Sidebar.vue'
 import { navItems } from '../data/defaultAdminState'
-import { cleanupCandidateLinks, fetchCandidateDetail, repostCandidate } from '../services/apiClient'
+import { cleanupCandidateLinks, fetchCandidateDetail } from '../services/apiClient'
 import { logoutAdmin, resetDeviceId } from '../services/authService'
 
 const route = useRoute()
@@ -14,7 +14,6 @@ const detail = ref(null)
 const loading = ref(true)
 const loadError = ref('')
 const actionMessage = ref('')
-const reposting = ref(false)
 const cleaning = ref(false)
 
 const candidate = computed(() => detail.value?.candidate || {})
@@ -24,6 +23,8 @@ const pipelineLogs = computed(() => detail.value?.pipelineLogs || [])
 const groupItems = computed(() => detail.value?.groupItems || [])
 const rawItems = computed(() => detail.value?.rawItems || [])
 const facebookMessage = computed(() => detail.value?.facebookMessage || '')
+const summaryText = computed(() => candidate.value.generated_summary_en || candidate.value.short_summary || candidate.value.summary || '저장된 영문 요약이 없습니다.')
+const whyText = computed(() => candidate.value.generated_why_it_matters_en || candidate.value.relevance_reason || '저장된 중요도 설명이 없습니다.')
 const imageUrls = computed(() => {
   const raw = candidate.value.image_urls_json || candidate.value.image_urls || []
   const list = Array.isArray(raw) ? raw : parseJson(raw) || []
@@ -53,7 +54,9 @@ function statusLabel(status) {
     SUMMARIZED: '요약 완료',
     SCORED: '점수 평가',
     SKIPPED: '제외',
+    TEXT_INVALID: '본문 부적합',
     POST_EXPIRED: '게시 만료',
+    AUTO_RETRY_BLOCKED: '자동 재시도 차단',
   }
   return map[status] || status || '-'
 }
@@ -80,35 +83,18 @@ async function loadDetail() {
   }
 }
 
-async function handleRepost() {
-  if (!candidate.value.id || reposting.value) return
-  reposting.value = true
-  loadError.value = ''
-  try {
-    const result = await repostCandidate(candidate.value.id)
-    if (!result.ok) {
-      const debug = result.result?.token_debug
-      const debugMessage = debug
-        ? ` / 토큰 확인: type=${debug.token_type || '-'}, valid=${debug.is_valid === true}, profile_id=${debug.profile_id || '-'}`
-        : ''
-      loadError.value = `${result.result?.error_message || result.message || '재게시 요청은 처리됐지만 Facebook 게시에 실패했습니다.'}${debugMessage}`
-    }
-    await loadDetail()
-  } catch (error) {
-    loadError.value = error instanceof Error ? error.message : '재게시 요청에 실패했습니다.'
-  } finally {
-    reposting.value = false
-  }
-}
-
 async function handleCleanupLinks() {
   if (!candidate.value.id || cleaning.value) return
   cleaning.value = true
   loadError.value = ''
   actionMessage.value = ''
   try {
-    const result = await cleanupCandidateLinks({ ids: [candidate.value.id], limit: 1 })
-    actionMessage.value = `링크/본문 정리 완료: URL ${result.resolved_url || 0}건, 본문 ${result.content_updated || 0}건, 점수 ${result.score_updated || 0}건, 실패 ${result.failed || 0}건`
+    const result = await cleanupCandidateLinks({
+      ids: [candidate.value.id],
+      limit: 1,
+      forceResummarize: true,
+    })
+    actionMessage.value = `링크/본문 정리 완료: URL ${result.resolved_url || 0}건, 본문 ${result.content_updated || 0}건, 요약 ${result.summary_updated || 0}건, 점수 ${result.score_updated || 0}건, 대기열 ${result.queue_updated || 0}건, 실패 ${result.failed || 0}건`
     await loadDetail()
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : '링크/본문 정리에 실패했습니다.'
@@ -152,16 +138,7 @@ onMounted(loadDetail)
             @click="handleCleanupLinks"
           >
             <Wrench :size="15" />
-            {{ cleaning ? '정리 중' : '링크/본문 정리' }}
-          </button>
-          <button
-            class="inline-flex items-center gap-xs rounded border border-outline-variant px-md py-xs text-body-sm font-bold disabled:cursor-not-allowed disabled:opacity-40"
-            type="button"
-            :disabled="reposting"
-            @click="handleRepost"
-          >
-            <RotateCcw :size="15" />
-            {{ reposting ? '재게시 중' : '재게시' }}
+            {{ cleaning ? '재생성 중' : '링크/본문 재생성' }}
           </button>
         </div>
       </div>
@@ -275,11 +252,11 @@ onMounted(loadDetail)
           <article class="control-card min-w-0 space-y-md p-lg">
             <div>
               <h2 class="mb-xs text-headline">영문 요약</h2>
-              <p class="whitespace-pre-wrap text-body-sm leading-6">{{ candidate.generated_summary_en || candidate.short_summary || candidate.summary || '저장된 영문 요약이 없습니다.' }}</p>
+              <p class="whitespace-pre-wrap text-body-sm leading-6">{{ summaryText }}</p>
             </div>
             <div>
               <h2 class="mb-xs text-headline">Why it matters</h2>
-              <p class="whitespace-pre-wrap text-body-sm leading-6">{{ candidate.generated_why_it_matters_en || candidate.relevance_reason || '저장된 중요도 설명이 없습니다.' }}</p>
+              <p class="whitespace-pre-wrap text-body-sm leading-6">{{ whyText }}</p>
             </div>
             <div>
               <h2 class="mb-xs text-headline">최종 Facebook 게시 본문</h2>
@@ -297,6 +274,10 @@ onMounted(loadDetail)
               <dl class="space-y-xs text-body-sm">
                 <div class="flex justify-between gap-md"><dt>중복 위험</dt><dd class="font-mono">{{ formatScore(candidate.duplicate_risk_score) }}</dd></div>
                 <div class="flex justify-between gap-md"><dt>한국 관련성</dt><dd class="font-mono">{{ formatScore(candidate.korea_relevance_score) }}</dd></div>
+                <div class="flex justify-between gap-md"><dt>카테고리</dt><dd>{{ candidate.content_priority_group || '-' }} / {{ candidate.content_category || candidate.category || '-' }}</dd></div>
+                <div class="flex justify-between gap-md"><dt>정착 관련성</dt><dd class="font-mono">{{ formatScore(candidate.settlement_relevance_score) }}</dd></div>
+                <div class="flex justify-between gap-md"><dt>실용 가치</dt><dd class="font-mono">{{ formatScore(candidate.practical_value_score) }}</dd></div>
+                <div class="flex justify-between gap-md"><dt>순환 점수</dt><dd class="font-mono">{{ formatScore(candidate.category_rotation_score) }}</dd></div>
                 <div class="flex justify-between gap-md"><dt>비자/노동</dt><dd class="font-mono">{{ formatScore(candidate.visa_or_labor_policy_score) }}</dd></div>
                 <div class="flex justify-between gap-md"><dt>게시 적합도</dt><dd class="font-mono">{{ formatScore(candidate.facebook_post_suitability_score) }}</dd></div>
                 <div class="flex justify-between gap-md"><dt>위험도</dt><dd>{{ candidate.risk_level || '-' }}</dd></div>
@@ -305,7 +286,7 @@ onMounted(loadDetail)
 
             <section class="control-card p-md">
               <h2 class="mb-sm text-headline">처리 사유</h2>
-              <p class="whitespace-pre-wrap text-body-sm leading-6">{{ candidate.selection_reason || candidate.skip_reason || candidate.fail_reason || '저장된 사유가 없습니다.' }}</p>
+              <p class="whitespace-pre-wrap text-body-sm leading-6">{{ candidate.category_selection_reason || candidate.review_required_reason || candidate.selection_reason || candidate.skip_reason || candidate.fail_reason || '저장된 사유가 없습니다.' }}</p>
             </section>
           </aside>
         </section>
@@ -320,7 +301,18 @@ onMounted(loadDetail)
                 <span v-if="log.error_code" class="text-error">{{ log.error_code }}</span>
               </div>
               <p v-if="log.error_message" class="whitespace-pre-wrap text-error">{{ log.error_message }}</p>
-              <pre v-if="parseJson(log.response_body)?.token_debug" class="mt-sm overflow-auto rounded bg-surface-container-low p-sm text-[11px]">{{ JSON.stringify(parseJson(log.response_body).token_debug, null, 2) }}</pre>
+              <details v-if="log.final_message" class="mt-sm">
+                <summary class="cursor-pointer font-bold">final_message</summary>
+                <pre class="mt-xs max-w-full whitespace-pre-wrap break-words rounded bg-surface-container-low p-sm text-[11px]">{{ log.final_message }}</pre>
+              </details>
+              <details v-if="log.payload_preview" class="mt-sm">
+                <summary class="cursor-pointer font-bold">payload preview</summary>
+                <pre class="mt-xs max-w-full overflow-auto rounded bg-surface-container-low p-sm text-[11px]">{{ JSON.stringify(parseJson(log.payload_preview) || log.payload_preview, null, 2) }}</pre>
+              </details>
+              <details v-if="log.response_body" class="mt-sm">
+                <summary class="cursor-pointer font-bold">Facebook response</summary>
+                <pre class="mt-xs max-w-full overflow-auto rounded bg-surface-container-low p-sm text-[11px]">{{ JSON.stringify(parseJson(log.response_body) || log.response_body, null, 2) }}</pre>
+              </details>
             </div>
             <p v-if="!publishLogs.length" class="text-body-sm text-on-surface-variant">게시 로그가 없습니다.</p>
           </div>

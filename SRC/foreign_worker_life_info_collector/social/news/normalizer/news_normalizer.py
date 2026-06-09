@@ -9,6 +9,7 @@ from ....utils.hash_utils import stable_hash
 from ....utils.text_normalizer import normalize_plain_text
 from ....utils.url_normalizer import normalize_url
 from ..collector.google_news_url_resolver import is_acceptable_source_url, is_google_news_url
+from ..category_rotation import classify_candidate
 from ..models import NewsCandidate, NewsItem
 
 
@@ -41,7 +42,7 @@ def normalize_news_item(item: NewsItem | NewsCandidate) -> NewsCandidate:
         canonical_url = ""
     similarity_key = build_similarity_key(title)
     hash_key = stable_hash(source_url or google_news_url or similarity_key)
-    return NewsCandidate(
+    normalized = NewsCandidate(
         id=candidate.id,
         title=title,
         source_url=source_url,
@@ -56,6 +57,15 @@ def normalize_news_item(item: NewsItem | NewsCandidate) -> NewsCandidate:
         image_urls=[normalize_url(url).strip() for url in (candidate.image_urls or []) if normalize_url(url).strip()],
         language=(candidate.language or "ko").strip(),
         category=(candidate.category or "").strip(),
+        content_category=(candidate.content_category or candidate.category or "").strip(),
+        content_priority_group=(candidate.content_priority_group or "").strip(),
+        settlement_relevance_score=candidate.settlement_relevance_score,
+        practical_value_score=candidate.practical_value_score,
+        category_rotation_score=candidate.category_rotation_score,
+        content_potential_score=candidate.content_potential_score,
+        category_selection_reason=normalize_plain_text(candidate.category_selection_reason),
+        is_sensitive=candidate.is_sensitive,
+        review_required_reason=normalize_plain_text(candidate.review_required_reason),
         keyword=(candidate.keyword or "").strip(),
         hash_key=hash_key,
         similarity_key=similarity_key,
@@ -95,3 +105,15 @@ def normalize_news_item(item: NewsItem | NewsCandidate) -> NewsCandidate:
         published_at=candidate.published_at,
         duplicate_group_id=candidate.duplicate_group_id,
     )
+    if not normalized.content_category or normalized.content_category in {"foreign_worker_news", "jobs"}:
+        decision = classify_candidate(normalized)
+        normalized.category = decision.content_category
+        normalized.content_category = decision.content_category
+        normalized.content_priority_group = decision.priority_group
+        normalized.settlement_relevance_score = decision.settlement_relevance_score
+        normalized.practical_value_score = decision.practical_value_score
+        normalized.content_potential_score = decision.content_potential_score
+        normalized.category_selection_reason = decision.reason
+        normalized.is_sensitive = decision.is_sensitive
+        normalized.review_required_reason = decision.review_required_reason
+    return normalized

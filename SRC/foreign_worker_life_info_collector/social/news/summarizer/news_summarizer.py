@@ -22,7 +22,7 @@ class NewsSummarizer:
         if llama_summary:
             return llama_summary
 
-        source_text = candidate.summary or candidate.content or candidate.title
+        source_text = candidate.content or candidate.summary or candidate.title
         short_summary = _compact(source_text, max_length=180)
         summary_lines = _fallback_summary_lines(candidate, short_summary)
         why_lines = _fallback_why_lines(candidate)
@@ -60,7 +60,7 @@ class NewsSummarizer:
                 f"Title: {candidate.title}",
                 f"Publisher: {candidate.publisher_name or candidate.source_name}",
                 f"Summary: {candidate.summary}",
-                f"Content: {candidate.content[:4000]}",
+                f"Content: {candidate.content[: int(os.getenv('OLLAMA_SUMMARY_MAX_INPUT_CHARS', '2500'))]}",
             ]
         )
         body = json.dumps(
@@ -70,7 +70,11 @@ class NewsSummarizer:
                 "stream": False,
                 "think": False,
                 "format": "json",
-                "options": {"temperature": 0, "num_predict": 900, "num_ctx": 4096},
+                "options": {
+                    "temperature": 0,
+                    "num_predict": int(os.getenv("OLLAMA_SUMMARY_NUM_PREDICT", "420")),
+                    "num_ctx": int(os.getenv("OLLAMA_SUMMARY_NUM_CTX", os.getenv("OLLAMA_NUM_CTX", "1536"))),
+                },
                 "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "30s"),
             }
         ).encode("utf-8")

@@ -30,6 +30,15 @@ NEWS_SELECT = """
     image_urls_json,
     language,
     category,
+    content_category,
+    content_priority_group,
+    settlement_relevance_score,
+    practical_value_score,
+    category_rotation_score,
+    content_potential_score,
+    category_selection_reason,
+    is_sensitive,
+    review_required_reason,
     keyword,
     hash_key,
     similarity_key,
@@ -168,11 +177,14 @@ class NewsRepository:
                     SELECT {NEWS_SELECT}
                     FROM social_news.candidate
                     WHERE publish_status IN ('READY_TO_PUBLISH', 'FAILED_RETRYABLE')
+                      AND collected_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
                       AND COALESCE(post_expired, FALSE) = FALSE
                       AND COALESCE(is_representative, TRUE) = TRUE
                       AND published_at IS NULL
                       AND COALESCE(facebook_post_url, '') = ''
                       AND COALESCE(risk_level, '') != 'HIGH'
+                      AND COALESCE(generated_summary_en, '') !~ '[가-힣]'
+                      AND COALESCE(generated_why_it_matters_en, '') !~ '[가-힣]'
                     ORDER BY evaluation_score DESC, collected_at DESC, id DESC
                     LIMIT %s
                     """,
@@ -199,6 +211,28 @@ class NewsRepository:
                     LIMIT %s
                     """,
                     (cycle_id, limit),
+                )
+                rows = cur.fetchall()
+                columns = [column.name for column in cur.description]
+        return [self._row_to_candidate(dict(zip(columns, row))) for row in rows]
+
+    def list_ready_since(self, cutoff_at: str, limit: int = 500) -> list[NewsCandidate]:
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT {NEWS_SELECT}
+                    FROM social_news.candidate
+                    WHERE collected_at >= %s
+                      AND publish_status = 'READY_TO_PUBLISH'
+                      AND COALESCE(post_expired, FALSE) = FALSE
+                      AND COALESCE(is_representative, TRUE) = TRUE
+                      AND published_at IS NULL
+                      AND COALESCE(facebook_post_url, '') = ''
+                    ORDER BY evaluation_score DESC, collected_at DESC, id DESC
+                    LIMIT %s
+                    """,
+                    (cutoff_at, limit),
                 )
                 rows = cur.fetchall()
                 columns = [column.name for column in cur.description]
@@ -260,6 +294,7 @@ class NewsRepository:
             "AUTO_RETRY_BLOCKED",
             "DUPLICATE",
             "TEXT_INVALID",
+            "REVIEW_REQUIRED",
         )
         with connect() as conn:
             with conn.cursor() as cur:
@@ -272,6 +307,8 @@ class NewsRepository:
                       AND COALESCE(is_representative, TRUE) = TRUE
                       AND published_at IS NULL
                       AND COALESCE(facebook_post_url, '') = ''
+                      AND COALESCE(generated_summary_en, '') !~ '[가-힣]'
+                      AND COALESCE(generated_why_it_matters_en, '') !~ '[가-힣]'
                       AND NOT (COALESCE(status, '') = ANY(%s))
                       AND NOT (COALESCE(publish_status, '') = ANY(%s))
                       AND (
@@ -282,6 +319,57 @@ class NewsRepository:
                     LIMIT %s
                     """,
                     (cycle_id, list(excluded), list(excluded), list(statuses), list(statuses), limit),
+                )
+                rows = cur.fetchall()
+                columns = [column.name for column in cur.description]
+        return [self._row_to_candidate(dict(zip(columns, row))) for row in rows]
+
+    def list_publish_candidates_since(self, cutoff_at: str, limit: int = 1000) -> list[NewsCandidate]:
+        statuses = (
+            "READY_TO_PUBLISH",
+            "FAILED_RETRYABLE",
+            "COLLECTED",
+            "NORMALIZED",
+            "SUMMARIZED",
+            "SCORED",
+            "SKIPPED_LOW_SCORE",
+        )
+        excluded = (
+            "POSTED",
+            "PUBLISHED",
+            "NOTIFIED",
+            "DRY_RUN_PUBLISHED",
+            "DRY_RUN_NOTIFIED",
+            "POST_EXPIRED",
+            "ARCHIVED",
+            "AUTO_RETRY_BLOCKED",
+            "DUPLICATE",
+            "TEXT_INVALID",
+            "REVIEW_REQUIRED",
+        )
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT {NEWS_SELECT}
+                    FROM social_news.candidate
+                    WHERE collected_at >= %s
+                      AND COALESCE(post_expired, FALSE) = FALSE
+                      AND COALESCE(is_representative, TRUE) = TRUE
+                      AND published_at IS NULL
+                      AND COALESCE(facebook_post_url, '') = ''
+                      AND COALESCE(generated_summary_en, '') !~ '[가-힣]'
+                      AND COALESCE(generated_why_it_matters_en, '') !~ '[가-힣]'
+                      AND NOT (COALESCE(status, '') = ANY(%s))
+                      AND NOT (COALESCE(publish_status, '') = ANY(%s))
+                      AND (
+                          COALESCE(status, '') = ANY(%s)
+                          OR COALESCE(publish_status, '') = ANY(%s)
+                      )
+                    ORDER BY evaluation_score DESC, collected_at DESC, id DESC
+                    LIMIT %s
+                    """,
+                    (cutoff_at, list(excluded), list(excluded), list(statuses), list(statuses), limit),
                 )
                 rows = cur.fetchall()
                 columns = [column.name for column in cur.description]
@@ -449,7 +537,10 @@ class NewsRepository:
                         """
                         INSERT INTO social_news.candidate(
                             normalized_item_id, source_type, source_url, canonical_url, google_news_url, source_name, publisher_name, title, summary,
-                            content, image_url, image_urls_json, language, category, keyword, hash_key, title_hash, similarity_key, short_summary,
+                            content, image_url, image_urls_json, language, category,
+                            content_category, content_priority_group, settlement_relevance_score, practical_value_score,
+                            category_rotation_score, content_potential_score, category_selection_reason, is_sensitive, review_required_reason,
+                            keyword, hash_key, title_hash, similarity_key, short_summary,
                             key_points, relevance_reason, risk_notes, generated_title, generated_summary_en, generated_why_it_matters_en,
                             evaluation_score, duplicate_risk_score,
                             foreign_worker_relevance_score, korea_relevance_score, visa_or_labor_policy_score,
@@ -463,7 +554,8 @@ class NewsRepository:
                         VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s
                         )
                         RETURNING id
                         """,
@@ -502,7 +594,12 @@ class NewsRepository:
                     SET source_type = %s, source_url = %s, canonical_url = %s, google_news_url = %s,
                         source_name = %s, publisher_name = %s, title = %s, summary = %s, content = %s,
                         image_url = %s, image_urls_json = %s::jsonb,
-                        language = %s, category = %s, keyword = %s, hash_key = %s, similarity_key = %s,
+                        language = %s, category = %s,
+                        content_category = %s, content_priority_group = %s,
+                        settlement_relevance_score = %s, practical_value_score = %s,
+                        category_rotation_score = %s, content_potential_score = %s,
+                        category_selection_reason = %s, is_sensitive = %s, review_required_reason = %s,
+                        keyword = %s, hash_key = %s, similarity_key = %s,
                         short_summary = %s, key_points = %s, relevance_reason = %s, risk_notes = %s,
                         generated_title = %s, generated_summary_en = %s, generated_why_it_matters_en = %s,
                         evaluation_score = %s, duplicate_risk_score = %s, foreign_worker_relevance_score = %s,
@@ -521,6 +618,129 @@ class NewsRepository:
                     """,
                     self._candidate_update_values(candidate),
                 )
+            conn.commit()
+        return candidate
+
+    def find_existing_article_url(self, candidate: NewsCandidate) -> str:
+        if candidate.id is None:
+            return ""
+        source_name = (candidate.source_name or candidate.publisher_name or "").strip()
+        clauses = ["candidate.id <> %s", "COALESCE(candidate.source_url, '') <> ''"]
+        params: list[Any] = [candidate.id]
+        if candidate.title:
+            clauses.append("candidate.title = %s")
+            params.append(candidate.title)
+        if source_name:
+            clauses.append("(candidate.source_name = %s OR candidate.publisher_name = %s)")
+            params.extend([source_name, source_name])
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT candidate.source_url, candidate.canonical_url
+                    FROM social_news.candidate candidate
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY
+                        CASE WHEN COALESCE(candidate.content, '') <> '' THEN 0 ELSE 1 END,
+                        COALESCE(candidate.last_seen_at, candidate.collected_at) DESC,
+                        candidate.id DESC
+                    LIMIT 10
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+        for source_url, canonical_url in rows:
+            url = safe_url(canonical_url or "") or safe_url(source_url or "")
+            if url:
+                return url
+        return ""
+
+    def update_article_recovery(
+        self,
+        candidate: NewsCandidate,
+        content_fetch_status: str,
+        content_fetch_error: str = "",
+    ) -> NewsCandidate:
+        if candidate.id is None:
+            raise ValueError("candidate.id is required for article recovery update")
+        image_urls_json = json.dumps(candidate.image_urls or [], ensure_ascii=False)
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE social_news.candidate
+                    SET source_url = %s,
+                        canonical_url = %s,
+                        content = %s,
+                        image_url = %s,
+                        image_urls_json = %s::jsonb,
+                        publisher_name = COALESCE(NULLIF(%s, ''), publisher_name),
+                        content_fetch_status = %s,
+                        content_fetch_error = %s,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                    RETURNING normalized_item_id
+                    """,
+                    (
+                        candidate.source_url,
+                        safe_canonical_url(candidate),
+                        candidate.content,
+                        candidate.image_url,
+                        image_urls_json,
+                        candidate.publisher_name,
+                        content_fetch_status,
+                        content_fetch_error[:300],
+                        candidate.id,
+                    ),
+                )
+                row = cur.fetchone()
+                normalized_item_id = row[0] if row else None
+                if normalized_item_id:
+                    cur.execute(
+                        """
+                        UPDATE social_news.normalized_item
+                        SET source_url = %s,
+                            canonical_url = %s,
+                            content = %s,
+                            image_url = %s,
+                            image_urls_json = %s::jsonb,
+                            publisher_name = COALESCE(NULLIF(%s, ''), publisher_name),
+                            content_fetch_status = %s,
+                            content_fetch_error = %s,
+                            normalized_at = CURRENT_TIMESTAMP
+                        WHERE id = %s
+                        """,
+                        (
+                            candidate.source_url,
+                            safe_canonical_url(candidate),
+                            candidate.content,
+                            candidate.image_url,
+                            image_urls_json,
+                            candidate.publisher_name,
+                            content_fetch_status,
+                            content_fetch_error[:300],
+                            normalized_item_id,
+                        ),
+                    )
+                    cur.execute(
+                        """
+                        UPDATE social_news.raw_item
+                        SET source_url = COALESCE(NULLIF(%s, ''), source_url),
+                            raw_content = COALESCE(NULLIF(%s, ''), raw_content),
+                            publisher_name = COALESCE(NULLIF(%s, ''), publisher_name),
+                            content_fetch_status = %s,
+                            content_fetch_error = %s
+                        WHERE normalized_item_id = %s
+                        """,
+                        (
+                            candidate.source_url,
+                            candidate.content,
+                            candidate.publisher_name,
+                            content_fetch_status,
+                            content_fetch_error[:300],
+                            normalized_item_id,
+                        ),
+                    )
             conn.commit()
         return candidate
 
@@ -610,19 +830,21 @@ class NewsRepository:
         response_body: str = "",
         error_code: str = "",
         error_message: str = "",
+        request_payload: str = "",
     ) -> int:
         cycle_id = self._runtime_cycle_id()
         response_payload = {"code": response_code, "body": response_body[:1000], "permalink": facebook_permalink}
+        request_payload = request_payload or "{}"
         with connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO social_news.publish_log(
                         cycle_id, news_candidate_id, channel, page_id, external_post_id, dry_run, status,
-                        response_payload, error_code, error_message, published_at, facebook_permalink,
+                        request_payload, response_payload, error_code, error_message, published_at, facebook_permalink,
                         score, threshold, message_preview, response_code, response_body
                     )
-                    VALUES (%s, %s, 'facebook', %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, 'facebook', %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
@@ -632,6 +854,7 @@ class NewsRepository:
                         facebook_post_id,
                         status == "DRY_RUN",
                         status,
+                        request_payload,
                         json.dumps(response_payload, ensure_ascii=False),
                         error_code,
                         error_message,
@@ -773,6 +996,77 @@ class NewsRepository:
             conn.commit()
         return int(count), str((target_row or [""])[0] or "")
 
+    def expire_ready_before_time(self, cutoff_at: str, expired_at: str, reason: str = "ROLLING_24H_EXPIRED") -> int:
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE social_news.candidate
+                    SET post_expired = TRUE,
+                        post_expired_at = %s,
+                        post_expired_reason = %s,
+                        publish_status = 'POST_EXPIRED',
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE collected_at < %s
+                      AND publish_status = 'READY_TO_PUBLISH'
+                      AND COALESCE(post_expired, FALSE) = FALSE
+                      AND published_at IS NULL
+                      AND COALESCE(facebook_post_url, '') = ''
+                    """,
+                    (expired_at, reason, cutoff_at),
+                )
+                count = cur.rowcount or 0
+            conn.commit()
+        return int(count)
+
+    def restore_recent_post_expired_since(self, cutoff_at: str) -> int:
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE social_news.candidate
+                    SET post_expired = FALSE,
+                        post_expired_reason = '',
+                        publish_status = 'READY_TO_PUBLISH',
+                        status = CASE WHEN status = 'POST_EXPIRED' THEN 'READY_TO_PUBLISH' ELSE status END,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE collected_at >= %s
+                      AND publish_status = 'POST_EXPIRED'
+                      AND COALESCE(evaluation_score, 0) >= COALESCE(NULLIF(score_threshold, 0), 40)
+                      AND published_at IS NULL
+                      AND COALESCE(facebook_post_url, '') = ''
+                      AND COALESCE(risk_level, '') != 'HIGH'
+                    """,
+                    (cutoff_at,),
+                )
+                count = cur.rowcount or 0
+            conn.commit()
+        return int(count)
+
+    def restore_auto_expired_unposted(self) -> int:
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE social_news.candidate
+                    SET post_expired = FALSE,
+                        post_expired_reason = '',
+                        publish_status = 'READY_TO_PUBLISH',
+                        status = CASE WHEN status = 'POST_EXPIRED' THEN 'READY_TO_PUBLISH' ELSE status END,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE publish_status = 'POST_EXPIRED'
+                      AND collected_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+                      AND COALESCE(post_expired_reason, '') IN ('DAILY_CYCLE_EXPIRED', 'ROLLING_24H_EXPIRED')
+                      AND COALESCE(evaluation_score, 0) >= COALESCE(NULLIF(score_threshold, 0), 40)
+                      AND published_at IS NULL
+                      AND COALESCE(facebook_post_url, '') = ''
+                      AND COALESCE(risk_level, '') != 'HIGH'
+                    """,
+                )
+                count = cur.rowcount or 0
+            conn.commit()
+        return int(count)
+
     def delete_candidates(self, candidate_ids: list[int]) -> int:
         ids = [int(candidate_id) for candidate_id in candidate_ids if candidate_id]
         if not ids:
@@ -803,6 +1097,15 @@ class NewsRepository:
             json.dumps(candidate.image_urls or [], ensure_ascii=False),
             candidate.language,
             candidate.category,
+            candidate.content_category,
+            candidate.content_priority_group,
+            candidate.settlement_relevance_score,
+            candidate.practical_value_score,
+            candidate.category_rotation_score,
+            candidate.content_potential_score,
+            candidate.category_selection_reason,
+            candidate.is_sensitive,
+            candidate.review_required_reason,
             candidate.keyword,
             candidate.hash_key,
             candidate.hash_key,
@@ -863,6 +1166,15 @@ class NewsRepository:
             json.dumps(candidate.image_urls or [], ensure_ascii=False),
             candidate.language,
             candidate.category,
+            candidate.content_category,
+            candidate.content_priority_group,
+            candidate.settlement_relevance_score,
+            candidate.practical_value_score,
+            candidate.category_rotation_score,
+            candidate.content_potential_score,
+            candidate.category_selection_reason,
+            candidate.is_sensitive,
+            candidate.review_required_reason,
             candidate.keyword,
             candidate.hash_key,
             candidate.similarity_key,
@@ -925,6 +1237,15 @@ class NewsRepository:
             image_urls=json_list(row.get("image_urls_json")),
             language=row.get("language") or "ko",
             category=row.get("category") or "",
+            content_category=row.get("content_category") or row.get("category") or "",
+            content_priority_group=row.get("content_priority_group") or "",
+            settlement_relevance_score=float(row.get("settlement_relevance_score") or 0.0),
+            practical_value_score=float(row.get("practical_value_score") or 0.0),
+            category_rotation_score=float(row.get("category_rotation_score") or 0.0),
+            content_potential_score=float(row.get("content_potential_score") or 0.0),
+            category_selection_reason=row.get("category_selection_reason") or "",
+            is_sensitive=bool(row.get("is_sensitive")),
+            review_required_reason=row.get("review_required_reason") or "",
             keyword=row.get("keyword") or "",
             hash_key=row.get("hash_key") or "",
             similarity_key=row.get("similarity_key") or "",

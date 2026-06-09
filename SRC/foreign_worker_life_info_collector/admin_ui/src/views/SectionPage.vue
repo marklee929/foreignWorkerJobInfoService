@@ -1,11 +1,11 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ChevronLeft, ChevronRight, RefreshCw, RotateCcw, Search, Trash2, Wrench } from '@lucide/vue'
+import { ChevronLeft, ChevronRight, RefreshCw, Search, Trash2, Wrench } from '@lucide/vue'
 import Header from '../components/Header.vue'
 import Sidebar from '../components/Sidebar.vue'
 import { navItems } from '../data/defaultAdminState'
-import { cleanupCandidateLinks, deleteCandidates, fetchCandidates, repostCandidate } from '../services/apiClient'
+import { cleanupCandidateLinks, deleteCandidates, fetchCandidates } from '../services/apiClient'
 import { logoutAdmin, resetDeviceId } from '../services/authService'
 
 const route = useRoute()
@@ -15,11 +15,13 @@ const selectedIds = ref(new Set())
 const loading = ref(false)
 const deleting = ref(false)
 const cleaning = ref(false)
-const repostingIds = ref(new Set())
 const loadError = ref('')
 const actionMessage = ref('')
 const searchText = ref('')
 const statusFilter = ref('')
+const priorityGroupFilter = ref('')
+const contentCategoryFilter = ref('')
+const sensitiveFilter = ref('')
 const includeDuplicates = ref(false)
 const page = ref(1)
 const pageSize = 10
@@ -32,7 +34,7 @@ const isDataView = computed(() => route.meta.dataView === true && route.name ===
 const categoryFilters = {
   content: [],
   'social-news': [],
-  lifestyle: ['생활', '지역', '상담', '복지', '교육', '의료', '주거'],
+  lifestyle: ['생활', '지원', '상담', '복지', '교육', '의료', '주거'],
   immigration: ['출입국', '체류', '비자', '사증', '외국인등록', '고용허가', 'E-9', 'H-2'],
   labor: ['노동', '근로', '임금', '퇴직', '산재', '근무', '고용', '계약'],
 }
@@ -88,25 +90,19 @@ function formatDate(value) {
 }
 
 function statusLabel(status) {
-  if (status === 'FAILED_REPOST_REQUIRED') {
-    return '재게시 필요'
-  }
-  if (status === 'FAILED_PERMISSION') {
-    return '권한 확인 필요'
-  }
-  if (status === 'FAILED_RETRYABLE') {
-    return '재시도 대기'
-  }
   const map = {
     CANDIDATE: '후보',
     READY_TO_PUBLISH: '게시 대기',
+    FAILED_REPOST_REQUIRED: '재게시 필요',
+    FAILED_PERMISSION: '권한 확인 필요',
+    FAILED_RETRYABLE: '재시도 대기',
     PUBLISHED: '게시 완료',
     DRY_RUN_PUBLISHED: '테스트 게시',
     NOTIFIED: '알림 완료',
     DRY_RUN_NOTIFIED: '테스트 알림',
     DUPLICATE: '중복 제외',
     DUPLICATE_SKIPPED: '중복 제외',
-    TEXT_INVALID: '텍스트 오류',
+    TEXT_INVALID: '본문 오류',
     FAILED: '실패',
     SKIPPED: '제외',
     COLLECTED: '수집',
@@ -134,6 +130,9 @@ async function loadRows() {
       size: pageSize,
       search: searchText.value.trim(),
       status: statusFilter.value,
+      priority_group: priorityGroupFilter.value,
+      content_category: contentCategoryFilter.value,
+      sensitive: sensitiveFilter.value,
       includeDuplicates: includeDuplicates.value ? '1' : '0',
     })
     rows.value = payload.items || []
@@ -218,37 +217,13 @@ async function handleCleanupLinks() {
       includeDuplicates: includeDuplicates.value ? '1' : '0',
       limit: selectedCount.value ? selectedCount.value : 50,
     })
-    actionMessage.value = `링크/본문 정리 완료: 대상 ${result.target || 0}건, URL ${result.resolved_url || 0}건, 본문 ${result.content_updated || 0}건, 점수 ${result.score_updated || 0}건, 실패 ${result.failed || 0}건`
+    actionMessage.value = `링크/본문 정리 완료: 대상 ${result.target || 0}건, URL ${result.resolved_url || 0}건, 본문 ${result.content_updated || 0}건, 점수 ${result.score_updated || 0}건, 대기열 ${result.queue_updated || 0}건, 실패 ${result.failed || 0}건`
     await loadRows()
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : '링크/본문 정리에 실패했습니다.'
   } finally {
     cleaning.value = false
   }
-}
-
-function canRepost(item) {
-  if (!item?.id) {
-    return false
-  }
-  const status = item.publish_status || item.status
-  const repostableStatuses = [
-    'READY_TO_PUBLISH',
-    'FAILED_PERMISSION',
-    'FAILED_REPOST_REQUIRED',
-    'FAILED_RETRYABLE',
-    'AUTO_RETRY_BLOCKED',
-    'POSTED',
-    'PUBLISHED',
-    'NOTIFIED',
-    'DRY_RUN_PUBLISHED',
-    'DRY_RUN_NOTIFIED',
-  ]
-  return (
-    repostableStatuses.includes(status) ||
-    Boolean(item.facebook_post_url) ||
-    Boolean(item.post_expired)
-  )
 }
 
 function openDetail(item) {
@@ -258,39 +233,6 @@ function openDetail(item) {
   router.push({ name: 'social-news-detail', params: { id: item.id } })
 }
 
-function tokenDebugSummary(debug) {
-  if (!debug) {
-    return ''
-  }
-  const scopes = Array.isArray(debug.scopes) ? debug.scopes.join(', ') : ''
-  return `토큰 확인: type=${debug.token_type || '-'}, valid=${debug.is_valid === true}, profile_id=${debug.profile_id || '-'}, scopes=${scopes || '-'}, expires_at=${debug.expires_at || '-'}`
-}
-
-async function handleRepost(item) {
-  if (!item?.id || repostingIds.value.has(item.id)) {
-    return
-  }
-  const next = new Set(repostingIds.value)
-  next.add(item.id)
-  repostingIds.value = next
-  loadError.value = ''
-  try {
-    const result = await repostCandidate(item.id)
-    if (!result.ok) {
-      const debugMessage = tokenDebugSummary(result.result?.token_debug)
-      const errorMessage = result.result?.error_message || result.message || '재게시 요청은 처리됐지만 Facebook 게시에 실패했습니다.'
-      loadError.value = debugMessage ? `${errorMessage} / ${debugMessage}` : errorMessage
-    }
-    await loadRows()
-  } catch (error) {
-    loadError.value = error instanceof Error ? error.message : '재게시 요청에 실패했습니다.'
-    await loadRows()
-  } finally {
-    const done = new Set(repostingIds.value)
-    done.delete(item.id)
-    repostingIds.value = done
-  }
-}
 
 function previousPage() {
   page.value = Math.max(1, page.value - 1)
@@ -317,7 +259,7 @@ function resetPageAndLoad() {
   loadRows()
 }
 
-watch([searchText, statusFilter, includeDuplicates], resetPageAndLoad)
+watch([searchText, statusFilter, priorityGroupFilter, contentCategoryFilter, sensitiveFilter, includeDuplicates], resetPageAndLoad)
 
 watch(page, loadRows)
 
@@ -434,8 +376,8 @@ onMounted(loadRows)
                   <th class="px-md py-sm">분류</th>
                   <th class="px-md py-sm">출처</th>
                   <th class="px-md py-sm">점수</th>
+                  <th class="px-md py-sm">콘텐츠</th>
                   <th class="px-md py-sm">Facebook</th>
-                  <th class="px-md py-sm">제어</th>
                   <th class="px-md py-sm">수집일</th>
                 </tr>
               </thead>
@@ -457,24 +399,17 @@ onMounted(loadRows)
                   </td>
                   <td class="px-md font-mono text-on-surface-variant">{{ item.duplicate_count || 0 }}</td>
                   <td class="px-md font-mono text-on-surface-variant">{{ item.related_source_count || 1 }}</td>
-                  <td class="px-md text-on-surface-variant">{{ item.category || '-' }}</td>
+                  <td class="px-md text-on-surface-variant">{{ item.content_category || item.category || '-' }}</td>
                   <td class="px-md text-on-surface-variant">{{ item.source_name || item.source_type || '-' }}</td>
                   <td class="px-md font-mono font-bold text-success">{{ formatScore(item.evaluation_score) }}</td>
                   <td class="px-md">
-                    <a v-if="item.facebook_post_url" class="font-bold text-primary" :href="item.facebook_post_url" target="_blank" rel="noreferrer" @click.stop>게시글</a>
+                    <span v-if="item.content_candidate_id" class="rounded bg-surface-container px-sm py-[2px] text-[10px] font-bold">
+                      {{ statusLabel(item.content_status) }}
+                    </span>
                     <span v-else class="text-on-surface-variant">-</span>
                   </td>
                   <td class="px-md">
-                    <button
-                      v-if="canRepost(item)"
-                      class="inline-flex items-center gap-xs rounded border border-outline-variant px-sm py-xs text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-40"
-                      type="button"
-                      :disabled="repostingIds.has(item.id)"
-                      @click.stop="handleRepost(item)"
-                    >
-                      <RotateCcw :size="13" />
-                      {{ repostingIds.has(item.id) ? '재게시 중' : '재게시' }}
-                    </button>
+                    <a v-if="item.content_facebook_post_url || item.facebook_post_url" class="font-bold text-primary" :href="item.content_facebook_post_url || item.facebook_post_url" target="_blank" rel="noreferrer" @click.stop>게시글</a>
                     <span v-else class="text-on-surface-variant">-</span>
                   </td>
                   <td class="px-md font-mono text-on-surface-variant">{{ formatDate(item.collected_at) }}</td>

@@ -9,6 +9,7 @@ import hmac
 import json
 import os
 import subprocess
+import traceback
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -20,6 +21,10 @@ from urllib.parse import parse_qs, urlparse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from ..content.repository import ContentRepository
+from ..content.service import ContentService
+from ..immigration.repository import ImmigrationNoticeRepository
+from ..immigration.service import ImmigrationNoticeService
 from ..jobs.employment_collector import EmploymentJobCollector
 from ..jobs.repository import JobCollectorRepository
 from ..occupation.collectors import JobInfoCollector, OccupationInfoCollector
@@ -30,6 +35,7 @@ from ..social.news.evaluator.candidate_evaluator import CandidateEvaluator
 from ..social.news.pipeline import NewsPipeline, today_cycle_id
 from ..social.news.publisher.facebook_publisher import FacebookPublisher, facebook_runtime_config_summary
 from ..social.news.repository.news_repository import NewsRepository, safe_url
+from ..social.news.summarizer.news_summarizer import NewsSummarizer
 from ..storage.db.postgres import connect, load_env_file, safe_connection_summary
 
 
@@ -59,6 +65,9 @@ JOB_COLLECTOR_LOCK = threading.Lock()
 JOB_COLLECTOR_THREAD: threading.Thread | None = None
 JOB_COLLECTOR_SCHEDULER_THREAD: threading.Thread | None = None
 JOB_COLLECTOR_SCHEDULER_STOP = threading.Event()
+ARTICLE_CLEANUP_THREAD: threading.Thread | None = None
+ARTICLE_CLEANUP_STOP = threading.Event()
+ARTICLE_CLEANUP_LOCK = threading.Lock()
 LLAMA_STATE = {
     "enabled": False,
     "connected": False,
@@ -66,8 +75,11 @@ LLAMA_STATE = {
     "model": "llama3.1",
     "status": "DISABLED",
     "message": "로컬 LLaMA 비활성",
+    "managed": True,
+    "manual_off": False,
 }
 LLAMA_PROCESS: subprocess.Popen | None = None
+LLAMA_MANUAL_OFF = False
 PUBLIC_POST_PATHS = {"/api/admin/auth/check", "/api/admin/auth/logout", "/api/admin/telegram/callback"}
 PUBLIC_GET_PREFIXES = ("/api/admin/auth/status/",)
 PUBLIC_GET_PATHS = {"/api/health"}
@@ -270,7 +282,7 @@ def run_bot_loop() -> None:
         from ..crew_team.social.news_bot import NewsBot
 
         keyword = os.environ.get("NEWS_COLLECTOR_KEYWORD", "foreign worker visa Korea")
-        interval = int(os.environ.get("NEWS_COLLECTOR_CYCLE_INTERVAL_MINUTES", "30")) * 60
+        interval = int(os.environ.get("NEWS_COLLECTOR_CYCLE_INTERVAL_MINUTES", "20")) * 60
         failure_limit = int(os.environ.get("NEWS_BOT_CONSECUTIVE_FAILURE_LIMIT", "3"))
         consecutive_failures = 0
         write_bot_log("bot", "STARTED", f"소셜 뉴스 봇 시작: 검색어 '{keyword}'")
@@ -409,7 +421,7 @@ def occupation_dashboard() -> dict[str, Any]:
 def occupation_job_rows(query: dict[str, list[str]]) -> dict[str, Any]:
     return occupation_repository().list_jobs(
         page=clamp_query_int(query, "page", 1, minimum=1, maximum=100000),
-        size=clamp_query_int(query, "size", 20, minimum=1, maximum=100),
+        size=clamp_query_int(query, "size", 20, minimum=1, maximum=2000),
         keyword=str(query.get("keyword", [""])[0]).strip(),
         job_code=str(query.get("job_code", [""])[0]).strip(),
         active_yn=str(query.get("active_yn", [""])[0]).strip().upper(),
@@ -423,7 +435,7 @@ def occupation_job_detail(item_id: int) -> dict[str, Any]:
 def occupation_rows(query: dict[str, list[str]]) -> dict[str, Any]:
     return occupation_repository().list_occupations(
         page=clamp_query_int(query, "page", 1, minimum=1, maximum=100000),
-        size=clamp_query_int(query, "size", 20, minimum=1, maximum=100),
+        size=clamp_query_int(query, "size", 20, minimum=1, maximum=2000),
         keyword=str(query.get("keyword", [""])[0]).strip(),
         occupation_code=str(query.get("occupation_code", [""])[0]).strip(),
         active_yn=str(query.get("active_yn", [""])[0]).strip().upper(),
@@ -437,7 +449,7 @@ def occupation_detail(item_id: int) -> dict[str, Any]:
 def occupation_keyword_rows(query: dict[str, list[str]]) -> dict[str, Any]:
     return occupation_repository().list_keyword_mappings(
         page=clamp_query_int(query, "page", 1, minimum=1, maximum=100000),
-        size=clamp_query_int(query, "size", 50, minimum=1, maximum=100),
+        size=clamp_query_int(query, "size", 50, minimum=1, maximum=2000),
         keyword=str(query.get("keyword", [""])[0]).strip(),
         language_code=str(query.get("language_code", [""])[0]).strip(),
     )
@@ -445,9 +457,93 @@ def occupation_keyword_rows(query: dict[str, list[str]]) -> dict[str, Any]:
 
 def occupation_collect_logs(query: dict[str, list[str]]) -> list[dict[str, Any]]:
     return occupation_repository().collect_logs(
-        limit=clamp_query_int(query, "limit", 50, minimum=1, maximum=100),
+        limit=clamp_query_int(query, "limit", 50, minimum=1, maximum=500),
         offset=clamp_query_int(query, "offset", 0, minimum=0, maximum=10000),
     )
+
+
+_IMMIGRATION_REPOSITORY: ImmigrationNoticeRepository | None = None
+_IMMIGRATION_SERVICE: ImmigrationNoticeService | None = None
+_CONTENT_REPOSITORY: ContentRepository | None = None
+_CONTENT_SERVICE: ContentService | None = None
+
+
+def immigration_repository() -> ImmigrationNoticeRepository:
+    global _IMMIGRATION_REPOSITORY
+    if _IMMIGRATION_REPOSITORY is None:
+        _IMMIGRATION_REPOSITORY = ImmigrationNoticeRepository()
+    return _IMMIGRATION_REPOSITORY
+
+
+def immigration_service() -> ImmigrationNoticeService:
+    global _IMMIGRATION_SERVICE
+    if _IMMIGRATION_SERVICE is None:
+        _IMMIGRATION_SERVICE = ImmigrationNoticeService(repository=immigration_repository())
+    return _IMMIGRATION_SERVICE
+
+
+def content_repository() -> ContentRepository:
+    global _CONTENT_REPOSITORY
+    if _CONTENT_REPOSITORY is None:
+        _CONTENT_REPOSITORY = ContentRepository()
+    return _CONTENT_REPOSITORY
+
+
+def content_service() -> ContentService:
+    global _CONTENT_SERVICE
+    if _CONTENT_SERVICE is None:
+        _CONTENT_SERVICE = ContentService(repository=content_repository())
+    return _CONTENT_SERVICE
+
+
+def immigration_dashboard() -> dict[str, Any]:
+    return immigration_repository().dashboard()
+
+
+def content_dashboard() -> dict[str, Any]:
+    return content_repository().dashboard()
+
+
+def content_candidate_rows(query: dict[str, list[str]]) -> dict[str, Any]:
+    return content_repository().list_candidates(
+        {
+            "page": clamp_query_int(query, "page", 1, minimum=1, maximum=100000),
+            "size": clamp_query_int(query, "size", 20, minimum=1, maximum=200),
+            "search": str(query.get("search", [""])[0]).strip(),
+            "source_domain": str(query.get("source_domain", [""])[0]).strip(),
+            "content_type": str(query.get("content_type", [""])[0]).strip(),
+            "category": str(query.get("category", [""])[0]).strip(),
+            "status": str(query.get("status", [""])[0]).strip(),
+            "publishable": str(query.get("publishable", [""])[0]).strip(),
+        }
+    )
+
+
+def content_candidate_detail(candidate_id: int) -> dict[str, Any]:
+    return content_repository().get_candidate(candidate_id)
+
+
+def immigration_notice_rows(query: dict[str, list[str]]) -> dict[str, Any]:
+    params = {
+        "page": clamp_query_int(query, "page", 1, minimum=1, maximum=100000),
+        "size": clamp_query_int(query, "size", 20, minimum=1, maximum=200),
+        "keyword": str(query.get("keyword", [""])[0]).strip(),
+        "source_type": str(query.get("source_type", [""])[0]).strip(),
+        "notice_type": str(query.get("notice_type", [""])[0]).strip(),
+        "visa_type": str(query.get("visa_type", [""])[0]).strip(),
+        "content_status": str(query.get("content_status", [""])[0]).strip(),
+        "importance_min": str(query.get("importance_min", [""])[0]).strip(),
+    }
+    return immigration_repository().list_notices(params)
+
+
+def immigration_notice_detail(notice_id: int) -> dict[str, Any]:
+    return immigration_repository().get_notice(notice_id)
+
+
+def immigration_collect(payload: dict[str, Any], source: str = "") -> dict[str, Any]:
+    limit = int(payload.get("limit") or 20) if isinstance(payload, dict) else 20
+    return immigration_service().collect(source=source, limit=max(1, min(limit, 100)))
 
 
 def run_occupation_job_collection(payload: dict[str, Any]) -> dict[str, Any]:
@@ -533,6 +629,8 @@ def start_job_collection(smoke: bool = False) -> dict[str, Any]:
 def job_scheduler_loop() -> None:
     while not JOB_COLLECTOR_SCHEDULER_STOP.is_set():
         settings = job_collector_settings()
+        if not settings.get("schedulerEnabled"):
+            break
         interval_minutes = int(settings["intervalMinutes"])
         next_run = datetime.now(timezone.utc) + timedelta(minutes=interval_minutes)
         JOB_COLLECTOR_STATUS["nextRunAt"] = next_run.isoformat()
@@ -580,6 +678,24 @@ def llama_config() -> tuple[bool, str, str]:
     return enabled, endpoint, model
 
 
+def is_managed_llama_endpoint(endpoint: str) -> bool:
+    parsed = urlparse(endpoint or "")
+    host = (parsed.hostname or "").lower()
+    return host in {"", "localhost", "127.0.0.1", "::1"}
+
+
+def llama_base_state(enabled: bool, endpoint: str, model: str) -> dict[str, Any]:
+    managed = is_managed_llama_endpoint(endpoint)
+    return {
+        "enabled": enabled,
+        "endpoint": endpoint,
+        "model": model,
+        "managed": managed,
+        "server_type": "managed-local" if managed else "external",
+        "manual_off": LLAMA_MANUAL_OFF,
+    }
+
+
 def unload_llama_model(endpoint: str, model: str) -> None:
     if not model:
         return
@@ -597,55 +713,117 @@ def unload_llama_model(endpoint: str, model: str) -> None:
         return
 
 
-def ensure_llama(start_command: bool = True) -> dict[str, Any]:
-    global LLAMA_PROCESS
-    enabled, endpoint, model = llama_config()
-    LLAMA_STATE.update({"enabled": enabled, "endpoint": endpoint, "model": model})
-    if not enabled:
-        LLAMA_STATE.update({"connected": False, "status": "DISABLED", "message": "로컬 LLaMA 비활성"})
-        return LLAMA_STATE
-    if is_llama_connected(endpoint):
-        LLAMA_STATE.update({"connected": True, "status": "CONNECTED", "message": "로컬 LLaMA 연결됨"})
-        return LLAMA_STATE
-    if start_command:
-        command = os.environ.get("LOCAL_LLAMA_COMMAND", "ollama serve")
-        LLAMA_STATE.update({"connected": False, "status": "STARTING", "message": "로컬 LLaMA 시작 중"})
-        try:
-            if not LLAMA_PROCESS or LLAMA_PROCESS.poll() is not None:
-                LLAMA_PROCESS = subprocess.Popen(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            for _ in range(10):
-                time.sleep(1)
-                if is_llama_connected(endpoint):
-                    LLAMA_STATE.update({"connected": True, "status": "CONNECTED", "message": "로컬 LLaMA 연결됨"})
-                    return LLAMA_STATE
-        except Exception as exc:
-            LLAMA_STATE.update({"connected": False, "status": "ERROR", "message": f"로컬 LLaMA 실행 실패: {str(exc)[:120]}"})
-            return LLAMA_STATE
-    LLAMA_STATE.update({"connected": False, "status": "DISCONNECTED", "message": "로컬 LLaMA 연결 실패"})
-    return LLAMA_STATE
+def should_stop_llama_server_on_off() -> bool:
+    return os.environ.get("LOCAL_LLAMA_STOP_SERVER_ON_OFF", "true").lower() in {"1", "true", "yes", "on"}
 
 
-def stop_llama() -> dict[str, Any]:
-    global LLAMA_PROCESS
-    enabled, endpoint, model = llama_config()
-    LLAMA_STATE.update({"enabled": enabled, "endpoint": endpoint, "model": model, "status": "STOPPING", "message": "로컬 LLaMA 종료 중"})
-    unload_llama_model(endpoint, model)
+def llama_process_env() -> dict[str, str]:
+    env = os.environ.copy()
+    defaults = {
+        "OLLAMA_KEEP_ALIVE": "5s",
+        "OLLAMA_NUM_PARALLEL": "1",
+        "OLLAMA_MAX_LOADED_MODELS": "1",
+    }
+    for key, value in defaults.items():
+        env.setdefault(key, value)
+    return env
+
+
+def terminate_local_ollama_server() -> bool:
+    terminated = False
     if LLAMA_PROCESS and LLAMA_PROCESS.poll() is None:
         try:
             LLAMA_PROCESS.terminate()
             LLAMA_PROCESS.wait(timeout=5)
+            terminated = True
         except Exception:
             try:
                 LLAMA_PROCESS.kill()
+                terminated = True
             except Exception:
                 pass
-    LLAMA_PROCESS = None
+    if not should_stop_llama_server_on_off():
+        return terminated
+    try:
+        subprocess.run(
+            ["taskkill", "/IM", "ollama.exe", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=10,
+        )
+        terminated = True
+    except Exception:
+        pass
+    return terminated
+
+
+def ensure_llama(start_command: bool = True, user_requested: bool = False) -> dict[str, Any]:
+    global LLAMA_PROCESS, LLAMA_MANUAL_OFF
+    enabled, endpoint, model = llama_config()
+    base = llama_base_state(enabled, endpoint, model)
+    LLAMA_STATE.update(base)
+    if not enabled:
+        LLAMA_STATE.update({"connected": False, "status": "DISABLED", "message": "LLaMA disabled by configuration."})
+        return LLAMA_STATE
+    if LLAMA_MANUAL_OFF and not user_requested:
+        message = "External LLaMA connection is off." if not base["managed"] else "Local LLaMA is stopped."
+        LLAMA_STATE.update({"connected": False, "status": "DISABLED", "message": message})
+        return LLAMA_STATE
+    if start_command and not user_requested and os.environ.get("LOCAL_LLAMA_AUTO_START", "false").lower() not in {"1", "true", "yes", "on"}:
+        if is_llama_connected(endpoint):
+            message = "External LLaMA connected." if not base["managed"] else "Local LLaMA connected."
+            LLAMA_STATE.update({"connected": True, "status": "CONNECTED", "message": message})
+            return LLAMA_STATE
+        LLAMA_STATE.update({"connected": False, "status": "STANDBY", "message": "LLaMA auto-start disabled. Use reconnect/start when needed."})
+        return LLAMA_STATE
+    if user_requested:
+        LLAMA_MANUAL_OFF = False
+        LLAMA_STATE.update({"manual_off": False})
     if is_llama_connected(endpoint):
-        LLAMA_STATE.update({"connected": False, "status": "DISCONNECTED", "message": "모델 메모리 해제 요청 완료. 외부 LLaMA 서버는 실행 중입니다."})
-    else:
-        LLAMA_STATE.update({"connected": False, "status": "DISABLED", "message": "로컬 LLaMA 중지됨"})
+        message = "External LLaMA connected." if not base["managed"] else "Local LLaMA connected."
+        LLAMA_STATE.update({"connected": True, "status": "CONNECTED", "message": message})
+        return LLAMA_STATE
+    if start_command and base["managed"]:
+        command = os.environ.get("LOCAL_LLAMA_COMMAND", "ollama serve")
+        LLAMA_STATE.update({"connected": False, "status": "STARTING", "message": "Starting local LLaMA process."})
+        try:
+            if not LLAMA_PROCESS or LLAMA_PROCESS.poll() is not None:
+                LLAMA_PROCESS = subprocess.Popen(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=llama_process_env())
+            for _ in range(10):
+                time.sleep(1)
+                if is_llama_connected(endpoint):
+                    LLAMA_STATE.update({"connected": True, "status": "CONNECTED", "message": "Local LLaMA connected."})
+                    return LLAMA_STATE
+        except Exception as exc:
+            LLAMA_STATE.update({"connected": False, "status": "ERROR", "message": f"Failed to start local LLaMA: {str(exc)[:120]}"})
+            return LLAMA_STATE
+    message = "External LLaMA is not reachable." if not base["managed"] else "Local LLaMA is not connected."
+    LLAMA_STATE.update({"connected": False, "status": "DISCONNECTED", "message": message})
     return LLAMA_STATE
 
+
+def stop_llama() -> dict[str, Any]:
+    global LLAMA_PROCESS, LLAMA_MANUAL_OFF
+    enabled, endpoint, model = llama_config()
+    base = llama_base_state(enabled, endpoint, model)
+    LLAMA_MANUAL_OFF = True
+    LLAMA_STATE.update({**base, "manual_off": True, "connected": False, "status": "STOPPING", "message": "Stopping LLaMA connection."})
+    if base["managed"]:
+        unload_llama_model(endpoint, model)
+        terminated = terminate_local_ollama_server()
+        LLAMA_PROCESS = None
+        connected = is_llama_connected(endpoint)
+        if connected:
+            message = "Local LLaMA model unload requested, but the local Ollama server is still reachable."
+        elif terminated:
+            message = "Local LLaMA stopped and local Ollama server process was terminated."
+        else:
+            message = "Local LLaMA stopped."
+        LLAMA_STATE.update({"connected": False, "status": "DISABLED", "message": message})
+    else:
+        LLAMA_STATE.update({"connected": False, "status": "DISABLED", "message": "External LLaMA connection disabled. Remote server was not stopped."})
+    return LLAMA_STATE
 
 def json_ready(value: Any) -> Any:
     if isinstance(value, list):
@@ -872,18 +1050,21 @@ def find_approved_session(device_id: str, ip_address: str, user_agent: str) -> d
     return fetch_one(
         """
         UPDATE admin.admin_login_session
-        SET last_seen_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        SET ip_address = %s,
+            user_agent = %s,
+            last_seen_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
         WHERE id = (
             SELECT id
             FROM admin.admin_login_session
-            WHERE device_id = %s AND ip_address = %s AND user_agent = %s AND status = 'APPROVED'
+            WHERE device_id = %s AND status = 'APPROVED'
             ORDER BY approved_at DESC NULLS LAST, id DESC
             LIMIT 1
         )
         RETURNING id, device_id, ip_address, user_agent, status, telegram_message_id,
                   requested_at, approved_at, rejected_at, logged_out_at, last_seen_at
         """,
-        (device_id, ip_address, user_agent),
+        (ip_address, user_agent, device_id),
     )
 
 
@@ -980,19 +1161,25 @@ def module_rows() -> list[dict[str, Any]]:
 
 
 def dashboard_summary() -> dict[str, Any]:
-    today_cycle_id = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d")
+    pipeline = NewsPipeline(repository=news_repository(), collectors=[])
+    window_start = pipeline.publish_window_start().isoformat()
     candidate_counts = fetch_one(
         """
         SELECT
             COUNT(*)::int AS candidate_count,
             COUNT(*) FILTER (
-                WHERE publish_cycle_id = %s
-                  AND publish_status = 'READY_TO_PUBLISH'
+                WHERE publish_status = 'READY_TO_PUBLISH'
+                  AND collected_at >= %s
                   AND COALESCE(post_expired, FALSE) = FALSE
+                  AND COALESCE(is_representative, TRUE) = TRUE
                   AND published_at IS NULL
+                  AND COALESCE(facebook_post_url, '') = ''
+                  AND COALESCE(risk_level, '') != 'HIGH'
+                  AND COALESCE(generated_summary_en, '') !~ '[가-힣]'
+                  AND COALESCE(generated_why_it_matters_en, '') !~ '[가-힣]'
             )::int AS today_ready_count,
             COUNT(*) FILTER (
-                WHERE publish_cycle_id < %s
+                WHERE collected_at < %s
                   AND publish_status = 'POST_EXPIRED'
             )::int AS previous_post_expired_count,
             COUNT(*) FILTER (
@@ -1007,41 +1194,65 @@ def dashboard_summary() -> dict[str, Any]:
             COUNT(*) FILTER (WHERE status = 'FAILED' OR publish_status IN ('FAILED', 'FAILED_RETRYABLE', 'FAILED_REPOST_REQUIRED', 'FAILED_PERMISSION'))::int AS failed_count
         FROM social_news.candidate
         """,
-        (today_cycle_id, today_cycle_id),
+        (window_start, window_start),
     )
     publish_metrics = fetch_one(
         """
         SELECT
-            COUNT(*) FILTER (WHERE publish_cycle_id = %s)::int AS today_article_count,
+            COUNT(*) FILTER (WHERE collected_at >= %s)::int AS today_article_count,
             COUNT(*) FILTER (
-                WHERE publish_cycle_id = %s
+                WHERE collected_at >= %s
                   AND COALESCE(post_expired, FALSE) = FALSE
                   AND published_at IS NULL
                   AND COALESCE(facebook_post_url, '') = ''
                   AND COALESCE(publish_status, '') NOT IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'POST_EXPIRED', 'ARCHIVED', 'AUTO_RETRY_BLOCKED')
             )::int AS today_unposted_count,
-            ROUND(AVG(evaluation_score) FILTER (WHERE publish_cycle_id = %s AND evaluation_score > 0), 2) AS avg_score,
+            ROUND(AVG(evaluation_score) FILTER (WHERE collected_at >= %s AND evaluation_score > 0), 2) AS avg_score,
             COUNT(*) FILTER (
-                WHERE publish_cycle_id = %s
-                  AND publish_status = 'READY_TO_PUBLISH'
+                WHERE publish_status = 'READY_TO_PUBLISH'
                   AND COALESCE(post_expired, FALSE) = FALSE
+                  AND COALESCE(is_representative, TRUE) = TRUE
                   AND published_at IS NULL
+                  AND COALESCE(facebook_post_url, '') = ''
+                  AND COALESCE(risk_level, '') != 'HIGH'
+                  AND COALESCE(generated_summary_en, '') !~ '[가-힣]'
+                  AND COALESCE(generated_why_it_matters_en, '') !~ '[가-힣]'
             )::int AS ready_count,
             COUNT(*) FILTER (
-                WHERE publish_cycle_id = %s
+                WHERE collected_at >= %s
                   AND publish_status = 'FAILED_RETRYABLE'
                   AND COALESCE(post_expired, FALSE) = FALSE
                   AND published_at IS NULL
             )::int AS retryable_count,
             COUNT(*) FILTER (
-                WHERE publish_cycle_id = %s
+                WHERE collected_at >= %s
                   AND publish_status IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED')
             )::int AS posted_today_count
         FROM social_news.candidate
         """,
-        (today_cycle_id, today_cycle_id, today_cycle_id, today_cycle_id, today_cycle_id, today_cycle_id),
+        (window_start, window_start, window_start, window_start, window_start),
     )
-    cooldown = NewsPipeline(repository=news_repository(), collectors=[]).publish_cooldown_info()
+    cooldown = pipeline.publish_cooldown_info()
+    category_metrics = fetch_one(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE collected_at >= %s AND content_priority_group = 'PRIMARY')::int AS primary_candidate_count,
+            COUNT(*) FILTER (WHERE collected_at >= %s AND content_priority_group = 'SECONDARY')::int AS secondary_candidate_count,
+            COUNT(*) FILTER (WHERE collected_at >= %s AND content_priority_group = 'TERTIARY')::int AS tertiary_candidate_count
+        FROM social_news.candidate
+        """,
+        (window_start, window_start, window_start),
+    )
+    recent_category_rows = fetch_all(
+        """
+        SELECT COALESCE(content_priority_group, 'PRIMARY') AS content_priority_group, COUNT(*)::int AS published_count
+        FROM social_news.candidate
+        WHERE published_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+          AND (publish_status IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED')
+               OR status IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED'))
+        GROUP BY COALESCE(content_priority_group, 'PRIMARY')
+        """
+    )
     module_counts = fetch_one(
         """
         SELECT
@@ -1062,16 +1273,16 @@ def dashboard_summary() -> dict[str, Any]:
     return {
         **candidate_counts,
         **publish_metrics,
+        **category_metrics,
+        "recent_24h_category_ratio": {row["content_priority_group"]: row["published_count"] for row in recent_category_rows},
+        "target_publish_ratio": "PRIMARY:SECONDARY 2:1 dynamic",
         **module_counts,
-        "current_threshold": 50,
+        "latest_cycle": latest_cycle,
         "cooldown": cooldown,
         "cooldown_active": cooldown.get("active", False),
         "next_publish_at": cooldown.get("next_publish_at", ""),
-        "latest_cycle": latest_cycle or None,
-        "api_connected": True,
-        "database": "foreign_worker_job_info",
+        "publish_window_start": window_start,
     }
-
 
 def candidate_rows(query: dict[str, list[str]] | None = None) -> dict[str, Any]:
     query = query or {}
@@ -1080,40 +1291,63 @@ def candidate_rows(query: dict[str, list[str]] | None = None) -> dict[str, Any]:
     include_duplicates = str(query.get("includeDuplicates", ["false"])[0]).lower() in {"1", "true", "yes", "on"}
     status = str(query.get("status", [""])[0]).strip()
     search = str(query.get("search", [""])[0]).strip()
+    content_category = str(query.get("content_category", [""])[0]).strip()
+    priority_group = str(query.get("priority_group", [""])[0]).strip().upper()
+    sensitive = str(query.get("sensitive", [""])[0]).strip().lower()
     offset = (page - 1) * size
     where = []
     params: list[Any] = []
     if not include_duplicates:
-        where.append("COALESCE(is_representative, TRUE) = TRUE")
+        where.append("COALESCE(candidate.is_representative, TRUE) = TRUE")
     if status:
-        where.append("(status = %s OR publish_status = %s)")
+        where.append("(candidate.status = %s OR candidate.publish_status = %s)")
         params.extend([status, status])
+    if content_category:
+        where.append("candidate.content_category = %s")
+        params.append(content_category)
+    if priority_group:
+        where.append("candidate.content_priority_group = %s")
+        params.append(priority_group)
+    if sensitive in {"1", "true", "yes", "on"}:
+        where.append("COALESCE(candidate.is_sensitive, FALSE) = TRUE")
+    elif sensitive in {"0", "false", "no", "off"}:
+        where.append("COALESCE(candidate.is_sensitive, FALSE) = FALSE")
     if search:
         where.append(
             """
             (
-                title ILIKE %s OR source_name ILIKE %s OR source_type ILIKE %s
-                OR source_url ILIKE %s OR similarity_key ILIKE %s
+                candidate.title ILIKE %s OR candidate.source_name ILIKE %s OR candidate.source_type ILIKE %s
+                OR candidate.source_url ILIKE %s OR candidate.similarity_key ILIKE %s
             )
             """
         )
         term = f"%{search}%"
         params.extend([term, term, term, term, term])
     where_sql = f"WHERE {' AND '.join(where)}" if where else ""
-    total = fetch_one(f"SELECT COUNT(*)::int AS total_count FROM social_news.candidate {where_sql}", tuple(params)).get("total_count", 0)
+    total = fetch_one(f"SELECT COUNT(*)::int AS total_count FROM social_news.candidate candidate {where_sql}", tuple(params)).get("total_count", 0)
     rows = fetch_all(
         f"""
-        SELECT id, category, 'KR' AS region, title, source_name, source_type, source_url, canonical_url,
-               google_news_url, publisher_name, evaluation_score,
-               duplicate_risk_score, status, publish_status, short_summary, selection_reason, skip_reason, fail_reason,
-               collected_at, facebook_post_url, facebook_post_id, publish_cycle_id AS cycle_id,
-               post_expired, post_expired_at, post_expired_reason, image_url,
-               related_source_count, duplicate_count, group_item_count, last_seen_at, is_representative,
-               representative_candidate_id, content_fetch_status, content_fetch_error,
-               normalized_item_id, similarity_key
-        FROM social_news.candidate
+        SELECT candidate.id, candidate.category, candidate.content_category, candidate.content_priority_group, candidate.settlement_relevance_score,
+               candidate.practical_value_score, candidate.category_rotation_score, candidate.content_potential_score,
+               candidate.category_selection_reason, candidate.is_sensitive, candidate.review_required_reason,
+               'KR' AS region, candidate.title, candidate.source_name, candidate.source_type, candidate.source_url, candidate.canonical_url,
+               candidate.google_news_url, candidate.publisher_name, candidate.evaluation_score,
+               candidate.duplicate_risk_score, candidate.status, candidate.publish_status, candidate.short_summary, candidate.selection_reason, candidate.skip_reason, candidate.fail_reason,
+               candidate.collected_at, candidate.facebook_post_url, candidate.facebook_post_id, candidate.publish_cycle_id AS cycle_id,
+               candidate.post_expired, candidate.post_expired_at, candidate.post_expired_reason, candidate.image_url,
+               candidate.related_source_count, candidate.duplicate_count, candidate.group_item_count, candidate.last_seen_at, candidate.is_representative,
+               candidate.representative_candidate_id, candidate.content_fetch_status, candidate.content_fetch_error,
+               candidate.normalized_item_id, candidate.similarity_key,
+               content_row.id AS content_candidate_id,
+               content_row.status AS content_status,
+               (content_row.status = 'POSTED') AS content_posted_yn,
+               content_row.facebook_post_url AS content_facebook_post_url
+        FROM social_news.candidate candidate
+        LEFT JOIN content.content_candidate content_row
+          ON content_row.raw_ref_table = 'social_news.candidate'
+         AND content_row.raw_ref_id = candidate.id
         {where_sql}
-        ORDER BY COALESCE(last_seen_at, collected_at) DESC, id DESC
+        ORDER BY COALESCE(candidate.last_seen_at, candidate.collected_at) DESC, candidate.id DESC
         LIMIT %s OFFSET %s
         """,
         tuple(params + [size, offset]),
@@ -1124,7 +1358,10 @@ def candidate_rows(query: dict[str, list[str]] | None = None) -> dict[str, Any]:
 def candidate_detail(candidate_id: int) -> dict[str, Any]:
     candidate = fetch_one(
         """
-        SELECT id, category, 'KR' AS region, title, source_name, source_type, source_url, canonical_url,
+        SELECT id, category, content_category, content_priority_group, settlement_relevance_score,
+               practical_value_score, category_rotation_score, content_potential_score,
+               category_selection_reason, is_sensitive, review_required_reason,
+               'KR' AS region, title, source_name, source_type, source_url, canonical_url,
                google_news_url, publisher_name, generated_title, generated_summary_en, generated_why_it_matters_en,
                summary, content, image_url, image_urls_json, language, keyword, hash_key, similarity_key,
                evaluation_score, duplicate_risk_score, foreign_worker_relevance_score, korea_relevance_score,
@@ -1183,7 +1420,17 @@ def candidate_detail(candidate_id: int) -> dict[str, Any]:
         "publishLogs": fetch_all(
             """
             SELECT id, channel, page_id, external_post_id, dry_run, status, error_code, error_message,
-                   published_at, facebook_permalink, score, threshold, message_preview, response_code, response_body
+                   published_at, facebook_permalink, score, threshold, message_preview, response_code, response_body,
+                   request_payload::text AS payload_preview,
+                   request_payload ->> 'message' AS final_message,
+                   request_payload ->> 'link' AS facebook_link_url,
+                   request_payload ->> 'link_valid_yn' AS link_valid_yn,
+                   request_payload ->> 'link_reject_reason' AS link_reject_reason,
+                   request_payload ->> 'facebook_debugger_url' AS facebook_debugger_url,
+                   request_payload ->> 'token_env_key' AS token_env_key,
+                   request_payload ->> 'token_masked' AS token_masked,
+                   request_payload ->> 'token_fingerprint' AS token_fingerprint,
+                   request_payload -> 'token_debug' AS token_debug
             FROM social_news.publish_log
             WHERE news_candidate_id = %s
             ORDER BY published_at DESC, id DESC
@@ -1226,28 +1473,58 @@ def cleanup_candidate_article_data(payload: dict[str, Any]) -> dict[str, Any]:
     selected_ids = [int(item) for item in ids if str(item).isdigit()] if isinstance(ids, list) else []
     limit = int(payload.get("limit") or 50) if isinstance(payload, dict) else 50
     limit = max(1, min(limit, 100))
+    force_resummarize = bool(payload.get("forceResummarize")) if isinstance(payload, dict) else False
+    suppress_empty_log = bool(payload.get("suppressEmptyLog")) if isinstance(payload, dict) else False
     rows = cleanup_candidate_targets(payload, selected_ids, limit)
-    result = {"target": len(rows), "updated": 0, "resolved_url": 0, "content_updated": 0, "score_updated": 0, "failed": 0, "skipped": 0}
+    result = {"target": len(rows), "updated": 0, "resolved_url": 0, "content_updated": 0, "summary_updated": 0, "score_updated": 0, "queue_updated": 0, "failed": 0, "skipped": 0}
+    touched_ids: list[int] = []
+    force_queue = bool(selected_ids)
     for row in rows:
-        updated = cleanup_single_candidate(row)
+        updated = cleanup_single_candidate(row, force_queue=force_queue, force_resummarize=force_resummarize)
+        touched_ids.append(int(row["id"]))
         for key in result:
             if key in updated and key != "target":
                 result[key] += int(updated[key] or 0)
-    news_repository().insert_pipeline_log(
-        "article_cleanup",
-        "COMPLETED",
-        f"기사 링크/본문 정리 완료: 대상 {result['target']}건, 갱신 {result['updated']}건, 실패 {result['failed']}건",
-        payload_json=json.dumps(result, ensure_ascii=False),
-    )
+    result["queue_updated"] = refresh_publish_queue_after_cleanup(touched_ids)
+    if result["target"] or not suppress_empty_log:
+        news_repository().insert_pipeline_log(
+            "article_cleanup",
+            "COMPLETED",
+            f"article cleanup completed: target {result['target']}, updated {result['updated']}, failed {result['failed']}",
+            payload_json=json.dumps(result, ensure_ascii=False),
+        )
     return {"ok": True, **result}
 
 
 def cleanup_candidate_targets(payload: dict[str, Any], selected_ids: list[int], limit: int) -> list[dict[str, Any]]:
     where = []
     params: list[Any] = []
+    auto_repair_only = bool(payload.get("autoRepairOnly")) if isinstance(payload, dict) else False
     if selected_ids:
         where.append("id = ANY(%s)")
         params.append(selected_ids)
+    elif auto_repair_only:
+        retry_minutes = max(5, min(int(payload.get("retryMinutes") or 30), 1440))
+        where.append(
+            """
+            (
+                COALESCE(source_url, '') = ''
+                OR COALESCE(content, '') = ''
+                OR length(COALESCE(content, '')) < 120
+                OR COALESCE(content_fetch_status, '') IN ('FAILED', 'URL_MISSING', 'PARTIAL')
+                OR COALESCE(evaluation_score, 0) = 0
+                OR COALESCE(status, '') = 'TEXT_INVALID'
+                OR COALESCE(publish_status, '') = 'TEXT_INVALID'
+            )
+            """
+        )
+        where.append("COALESCE(status, '') NOT IN ('DUPLICATE', 'DUPLICATE_SKIPPED', 'ARCHIVED', 'POSTED', 'PUBLISHED', 'NOTIFIED')")
+        where.append("COALESCE(publish_status, '') NOT IN ('DUPLICATE', 'DUPLICATE_SKIPPED', 'ARCHIVED', 'POSTED', 'PUBLISHED', 'NOTIFIED')")
+        where.append("published_at IS NULL")
+        where.append("COALESCE(facebook_post_url, '') = ''")
+        where.append("COALESCE(is_representative, TRUE) = TRUE")
+        where.append("(updated_at IS NULL OR updated_at < CURRENT_TIMESTAMP - (%s || ' minutes')::interval)")
+        params.append(retry_minutes)
     else:
         where.append(
             """
@@ -1255,6 +1532,9 @@ def cleanup_candidate_targets(payload: dict[str, Any], selected_ids: list[int], 
                 COALESCE(source_url, '') = ''
                 OR COALESCE(content, '') = ''
                 OR COALESCE(content_fetch_status, '') IN ('FAILED', 'URL_MISSING')
+                OR COALESCE(evaluation_score, 0) = 0
+                OR COALESCE(status, '') IN ('TEXT_INVALID', 'DUPLICATE', 'SKIPPED', 'FAILED', 'POST_EXPIRED')
+                OR COALESCE(publish_status, '') IN ('TEXT_INVALID', 'DUPLICATE', 'SKIPPED', 'FAILED', 'POST_EXPIRED')
             )
             """
         )
@@ -1290,12 +1570,73 @@ def cleanup_candidate_targets(payload: dict[str, Any], selected_ids: list[int], 
     )
 
 
-def cleanup_single_candidate(row: dict[str, Any]) -> dict[str, int]:
+def start_article_cleanup_scheduler() -> None:
+    global ARTICLE_CLEANUP_THREAD
+    enabled = os.getenv("NEWS_ARTICLE_AUTO_CLEANUP", "true").strip().lower() in {"1", "true", "yes", "on"}
+    if not enabled:
+        print("[article-cleanup] automatic cleanup disabled", flush=True)
+        return
+    if ARTICLE_CLEANUP_THREAD and ARTICLE_CLEANUP_THREAD.is_alive():
+        return
+    ARTICLE_CLEANUP_STOP.clear()
+    ARTICLE_CLEANUP_THREAD = threading.Thread(target=run_article_cleanup_scheduler, name="workconnect-article-cleanup", daemon=True)
+    ARTICLE_CLEANUP_THREAD.start()
+
+
+def run_article_cleanup_scheduler() -> None:
+    interval_minutes = int(os.getenv("NEWS_ARTICLE_AUTO_CLEANUP_INTERVAL_MINUTES", "15") or "15")
+    interval_seconds = max(300, interval_minutes * 60)
+    limit = max(1, min(int(os.getenv("NEWS_ARTICLE_AUTO_CLEANUP_LIMIT", "20") or "20"), 100))
+    initial_delay = max(30, min(int(os.getenv("NEWS_ARTICLE_AUTO_CLEANUP_INITIAL_DELAY_SECONDS", "90") or "90"), interval_seconds))
+    print(f"[article-cleanup] automatic cleanup every {interval_seconds // 60} minutes, limit={limit}", flush=True)
+    if ARTICLE_CLEANUP_STOP.wait(initial_delay):
+        return
+    while not ARTICLE_CLEANUP_STOP.is_set():
+        run_article_cleanup_once(limit=limit)
+        if ARTICLE_CLEANUP_STOP.wait(interval_seconds):
+            break
+
+
+def run_article_cleanup_once(limit: int = 20) -> dict[str, Any]:
+    if not ARTICLE_CLEANUP_LOCK.acquire(blocking=False):
+        return {"ok": False, "status": "SKIPPED", "message": "article cleanup already running"}
+    try:
+        result = cleanup_candidate_article_data(
+            {
+                "limit": limit,
+                "autoRepairOnly": True,
+                "includeDuplicates": "0",
+                "forceResummarize": False,
+                "suppressEmptyLog": True,
+                "retryMinutes": int(os.getenv("NEWS_ARTICLE_AUTO_CLEANUP_RETRY_MINUTES", "30") or "30"),
+            }
+        )
+        if int(result.get("target") or 0) > 0:
+            print(
+                "[article-cleanup] "
+                f"target={result.get('target')} updated={result.get('updated')} "
+                f"content={result.get('content_updated')} failed={result.get('failed')} "
+                f"queue={result.get('queue_updated')}",
+                flush=True,
+            )
+        return result
+    except Exception as exc:
+        print(f"[article-cleanup][WARN] automatic cleanup failed: {exc}", flush=True)
+        try:
+            news_repository().insert_pipeline_log("article_cleanup", "FAILED", f"automatic cleanup failed: {str(exc)[:180]}")
+        except Exception:
+            pass
+        return {"ok": False, "status": "FAILED", "message": str(exc)[:300]}
+    finally:
+        ARTICLE_CLEANUP_LOCK.release()
+
+
+def cleanup_single_candidate(row: dict[str, Any], force_queue: bool = False, force_resummarize: bool = False) -> dict[str, int]:
     candidate_id = int(row["id"])
     source_url = safe_url(row.get("source_url") or "")
     canonical_url = safe_url(row.get("canonical_url") or "")
     google_news_url = str(row.get("google_news_url") or "").strip()
-    result = {"updated": 0, "resolved_url": 0, "content_updated": 0, "score_updated": 0, "failed": 0, "skipped": 0}
+    result = {"updated": 0, "resolved_url": 0, "content_updated": 0, "summary_updated": 0, "score_updated": 0, "failed": 0, "skipped": 0}
 
     if not source_url:
         sibling_url = find_existing_article_url(row)
@@ -1331,7 +1672,11 @@ def cleanup_single_candidate(row: dict[str, Any]) -> dict[str, int]:
         except Exception as exc:
             content_status = "FAILED"
             content_error = str(exc)[:300]
-    score_payload = score_cleanup_candidate(candidate_id, source_url, canonical_url, content)
+    summary_payload = summarize_cleanup_candidate(candidate_id, source_url, canonical_url, content) if force_resummarize else {}
+    if summary_payload:
+        result["summary_updated"] = 1
+
+    score_payload = score_cleanup_candidate(candidate_id, source_url, canonical_url, content, force_queue=force_queue)
     if score_payload:
         result["score_updated"] = 1
 
@@ -1355,6 +1700,7 @@ def cleanup_single_candidate(row: dict[str, Any]) -> dict[str, int]:
         publisher_name=publisher_name,
         content_fetch_status=content_status,
         content_fetch_error=content_error,
+        summary_payload=summary_payload,
         score_payload=score_payload,
     )
     return result
@@ -1399,7 +1745,7 @@ def find_existing_article_url(row: dict[str, Any]) -> str:
     return ""
 
 
-def score_cleanup_candidate(candidate_id: int, source_url: str, canonical_url: str, content: str) -> dict[str, Any]:
+def score_cleanup_candidate(candidate_id: int, source_url: str, canonical_url: str, content: str, force_queue: bool = False) -> dict[str, Any]:
     candidate = news_repository().get_candidate(candidate_id)
     if not candidate:
         return {}
@@ -1407,6 +1753,12 @@ def score_cleanup_candidate(candidate_id: int, source_url: str, canonical_url: s
     candidate.canonical_url = canonical_url
     candidate.content = content or candidate.content
     evaluation = CandidateEvaluator().evaluate(candidate, threshold=40.0)
+    decision = evaluation.decision
+    reason = (
+        "관리자 링크/본문 정리 요청으로 재채점 후 게시 대기열에 다시 추가했습니다."
+        if decision == "READY_TO_PUBLISH" and force_queue
+        else evaluation.reason
+    )
     return {
         "evaluation_score": evaluation.total_score,
         "duplicate_risk_score": evaluation.duplicate_risk_score,
@@ -1416,12 +1768,40 @@ def score_cleanup_candidate(candidate_id: int, source_url: str, canonical_url: s
         "freshness_score": evaluation.freshness_score,
         "source_reliability_score": evaluation.source_reliability_score,
         "facebook_post_suitability_score": evaluation.facebook_post_suitability_score,
+        "content_category": candidate.content_category,
+        "content_priority_group": candidate.content_priority_group,
+        "settlement_relevance_score": evaluation.settlement_relevance_score,
+        "practical_value_score": evaluation.practical_value_score,
+        "category_rotation_score": candidate.category_rotation_score,
+        "content_potential_score": evaluation.content_potential_score,
+        "category_selection_reason": candidate.category_selection_reason,
+        "is_sensitive": evaluation.is_sensitive,
+        "review_required_reason": evaluation.review_required_reason,
         "score_threshold": evaluation.threshold,
         "score_breakdown_json": evaluation.score_breakdown_json,
         "risk_level": "HIGH" if evaluation.duplicate_risk_score >= 0.85 else "LOW",
-        "decision": evaluation.decision,
-        "selection_reason": evaluation.reason if evaluation.decision == "READY_TO_PUBLISH" else "",
-        "skip_reason": evaluation.reason if evaluation.decision != "READY_TO_PUBLISH" else "",
+        "decision": decision,
+        "selection_reason": reason if decision == "READY_TO_PUBLISH" else "",
+        "skip_reason": reason if decision != "READY_TO_PUBLISH" else "",
+    }
+
+
+def summarize_cleanup_candidate(candidate_id: int, source_url: str, canonical_url: str, content: str) -> dict[str, Any]:
+    candidate = news_repository().get_candidate(candidate_id)
+    if not candidate:
+        return {}
+    candidate.source_url = source_url or candidate.source_url
+    candidate.canonical_url = canonical_url or candidate.canonical_url
+    candidate.content = content or candidate.content
+    summary = NewsSummarizer(timeout=60).summarize(candidate)
+    return {
+        "short_summary": summary.short_summary,
+        "key_points": "\n".join(summary.key_points),
+        "relevance_reason": summary.relevance_reason,
+        "risk_notes": summary.risk_notes,
+        "generated_title": summary.generated_title,
+        "generated_summary_en": summary.generated_summary_en,
+        "generated_why_it_matters_en": summary.generated_why_it_matters_en,
     }
 
 
@@ -1438,6 +1818,7 @@ def update_cleanup_rows(
     publisher_name: str,
     content_fetch_status: str,
     content_fetch_error: str,
+    summary_payload: dict[str, Any],
     score_payload: dict[str, Any],
 ) -> None:
     image_urls_json = json.dumps(image_urls or [], ensure_ascii=False) if not isinstance(image_urls, str) else image_urls
@@ -1454,6 +1835,13 @@ def update_cleanup_rows(
                     publisher_name = COALESCE(NULLIF(%s, ''), publisher_name),
                     content_fetch_status = %s,
                     content_fetch_error = %s,
+                    short_summary = COALESCE(NULLIF(%s, ''), short_summary),
+                    key_points = COALESCE(NULLIF(%s, ''), key_points),
+                    relevance_reason = COALESCE(NULLIF(%s, ''), relevance_reason),
+                    risk_notes = COALESCE(NULLIF(%s, ''), risk_notes),
+                    generated_title = COALESCE(NULLIF(%s, ''), generated_title),
+                    generated_summary_en = COALESCE(NULLIF(%s, ''), generated_summary_en),
+                    generated_why_it_matters_en = COALESCE(NULLIF(%s, ''), generated_why_it_matters_en),
                     evaluation_score = COALESCE(%s, evaluation_score),
                     duplicate_risk_score = COALESCE(%s, duplicate_risk_score),
                     foreign_worker_relevance_score = COALESCE(%s, foreign_worker_relevance_score),
@@ -1462,17 +1850,42 @@ def update_cleanup_rows(
                     freshness_score = COALESCE(%s, freshness_score),
                     source_reliability_score = COALESCE(%s, source_reliability_score),
                     facebook_post_suitability_score = COALESCE(%s, facebook_post_suitability_score),
+                    content_category = COALESCE(NULLIF(%s, ''), content_category),
+                    content_priority_group = COALESCE(NULLIF(%s, ''), content_priority_group),
+                    settlement_relevance_score = COALESCE(%s, settlement_relevance_score),
+                    practical_value_score = COALESCE(%s, practical_value_score),
+                    category_rotation_score = COALESCE(%s, category_rotation_score),
+                    content_potential_score = COALESCE(%s, content_potential_score),
+                    category_selection_reason = COALESCE(NULLIF(%s, ''), category_selection_reason),
+                    is_sensitive = COALESCE(%s, is_sensitive),
+                    review_required_reason = COALESCE(NULLIF(%s, ''), review_required_reason),
                     score_threshold = COALESCE(%s, score_threshold),
                     score_breakdown_json = COALESCE(%s, score_breakdown_json),
                     risk_level = COALESCE(NULLIF(%s, ''), risk_level),
                     selection_reason = COALESCE(NULLIF(%s, ''), selection_reason),
                     skip_reason = COALESCE(NULLIF(%s, ''), skip_reason),
+                    fail_reason = CASE
+                        WHEN COALESCE(NULLIF(%s, ''), '') = 'READY_TO_PUBLISH' THEN ''
+                        ELSE fail_reason
+                    END,
+                    post_expired = CASE
+                        WHEN COALESCE(NULLIF(%s, ''), '') = 'READY_TO_PUBLISH' THEN FALSE
+                        ELSE post_expired
+                    END,
+                    post_expired_reason = CASE
+                        WHEN COALESCE(NULLIF(%s, ''), '') = 'READY_TO_PUBLISH' THEN ''
+                        ELSE post_expired_reason
+                    END,
+                    is_representative = CASE
+                        WHEN COALESCE(NULLIF(%s, ''), '') = 'READY_TO_PUBLISH' THEN TRUE
+                        ELSE is_representative
+                    END,
                     status = CASE
-                        WHEN status IN ('TEXT_INVALID', 'CANDIDATE', 'NORMALIZED', 'SUMMARIZED', 'SCORED', 'SKIPPED') THEN COALESCE(NULLIF(%s, ''), status)
+                        WHEN status NOT IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED', 'ARCHIVED', 'AUTO_RETRY_BLOCKED') THEN COALESCE(NULLIF(%s, ''), status)
                         ELSE status
                     END,
                     publish_status = CASE
-                        WHEN publish_status IN ('TEXT_INVALID', 'CANDIDATE', 'NORMALIZED', 'SUMMARIZED', 'SCORED', 'SKIPPED') THEN COALESCE(NULLIF(%s, ''), publish_status)
+                        WHEN publish_status NOT IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED', 'ARCHIVED', 'AUTO_RETRY_BLOCKED') THEN COALESCE(NULLIF(%s, ''), publish_status)
                         ELSE publish_status
                     END,
                     updated_at = CURRENT_TIMESTAMP
@@ -1487,6 +1900,13 @@ def update_cleanup_rows(
                     publisher_name,
                     content_fetch_status,
                     content_fetch_error,
+                    summary_payload.get("short_summary", ""),
+                    summary_payload.get("key_points", ""),
+                    summary_payload.get("relevance_reason", ""),
+                    summary_payload.get("risk_notes", ""),
+                    summary_payload.get("generated_title", ""),
+                    summary_payload.get("generated_summary_en", ""),
+                    summary_payload.get("generated_why_it_matters_en", ""),
                     score_payload.get("evaluation_score"),
                     score_payload.get("duplicate_risk_score"),
                     score_payload.get("foreign_worker_relevance_score"),
@@ -1495,11 +1915,24 @@ def update_cleanup_rows(
                     score_payload.get("freshness_score"),
                     score_payload.get("source_reliability_score"),
                     score_payload.get("facebook_post_suitability_score"),
+                    score_payload.get("content_category", ""),
+                    score_payload.get("content_priority_group", ""),
+                    score_payload.get("settlement_relevance_score"),
+                    score_payload.get("practical_value_score"),
+                    score_payload.get("category_rotation_score"),
+                    score_payload.get("content_potential_score"),
+                    score_payload.get("category_selection_reason", ""),
+                    score_payload.get("is_sensitive"),
+                    score_payload.get("review_required_reason", ""),
                     score_payload.get("score_threshold"),
                     score_payload.get("score_breakdown_json"),
                     score_payload.get("risk_level", ""),
                     score_payload.get("selection_reason", ""),
                     score_payload.get("skip_reason", ""),
+                    score_payload.get("decision", ""),
+                    score_payload.get("decision", ""),
+                    score_payload.get("decision", ""),
+                    score_payload.get("decision", ""),
                     score_payload.get("decision", ""),
                     score_payload.get("decision", ""),
                     candidate_id,
@@ -1538,6 +1971,44 @@ def update_cleanup_rows(
         conn.commit()
 
 
+def refresh_publish_queue_after_cleanup(candidate_ids: list[int]) -> int:
+    ids = [int(candidate_id) for candidate_id in candidate_ids if candidate_id]
+    if not ids:
+        return 0
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE social_news.candidate
+                SET status = 'READY_TO_PUBLISH',
+                    publish_status = 'READY_TO_PUBLISH',
+                    post_expired = FALSE,
+                    post_expired_reason = '',
+                    fail_reason = '',
+                    skip_reason = '',
+                    is_representative = TRUE,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ANY(%s)
+                  AND COALESCE(evaluation_score, 0) >= COALESCE(NULLIF(score_threshold, 0), 40)
+                  AND collected_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+                  AND COALESCE(source_url, '') <> ''
+                  AND source_url NOT ILIKE '%%news.google.com/rss/articles%%'
+                  AND source_url NOT ILIKE '%%news.google.com/articles%%'
+                  AND source_url !~ '://[^/]+/?$'
+                  AND source_url !~ '/path/A'
+                  AND COALESCE(risk_level, '') != 'HIGH'
+                  AND published_at IS NULL
+                  AND COALESCE(facebook_post_url, '') = ''
+                  AND COALESCE(status, '') NOT IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED', 'ARCHIVED', 'AUTO_RETRY_BLOCKED')
+                  AND COALESCE(publish_status, '') NOT IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED', 'ARCHIVED', 'AUTO_RETRY_BLOCKED')
+                """,
+                (ids,),
+            )
+            updated = cur.rowcount or 0
+        conn.commit()
+    return int(updated)
+
+
 def repost_candidate(candidate_id: int) -> dict[str, Any]:
     repository = news_repository()
     candidate = repository.get_candidate(candidate_id)
@@ -1547,7 +2018,6 @@ def repost_candidate(candidate_id: int) -> dict[str, Any]:
         return {"ok": False, "message": "원문 URL이 없어 재게시할 수 없습니다."}
 
     cycle_id = today_cycle_id()
-    candidate.selection_reason = "관리자 재게시 요청으로 즉시 Facebook 게시를 시도했습니다."
     candidate.skip_reason = ""
     candidate.fail_reason = ""
     candidate.post_expired = False
@@ -1611,8 +2081,21 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 self._handle_auth_status(path)
             elif path == "/api/admin/modules":
                 self._send_json({"items": module_rows()})
+            elif path == "/api/admin/facebook/status":
+                self._send_json(facebook_runtime_config_summary())
             elif path == "/api/dashboard/summary":
                 self._send_json(dashboard_summary())
+            elif path == "/api/admin/content/dashboard":
+                self._send_json(content_dashboard())
+            elif path == "/api/admin/content/candidates":
+                self._send_json(content_candidate_rows(query))
+            elif path.startswith("/api/admin/content/candidates/"):
+                raw_id = path.rsplit("/", 1)[-1]
+                if not raw_id.isdigit():
+                    self._send_json({"error": "bad_request", "message": "content candidate id is invalid"}, status=400)
+                    return
+                detail = content_candidate_detail(int(raw_id))
+                self._send_json(detail if detail else {"error": "not_found", "message": "content candidate not found"}, status=200 if detail else 404)
             elif path == "/api/social/news/candidates":
                 self._send_json(candidate_rows(query))
             elif path.startswith("/api/social/news/candidates/"):
@@ -1665,9 +2148,21 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(occupation_keyword_rows(query))
             elif path == "/api/admin/occupation/collect-logs":
                 self._send_json({"items": occupation_collect_logs(query)})
+            elif path == "/api/admin/immigration/dashboard":
+                self._send_json(immigration_dashboard())
+            elif path == "/api/admin/immigration/notices":
+                self._send_json(immigration_notice_rows(query))
+            elif path.startswith("/api/admin/immigration/notices/"):
+                raw_id = path.rsplit("/", 1)[-1]
+                if not raw_id.isdigit():
+                    self._send_json({"error": "bad_request", "message": "notice id is invalid"}, status=400)
+                    return
+                detail = immigration_notice_detail(int(raw_id))
+                self._send_json(detail if detail else {"error": "not_found", "message": "notice not found"}, status=200 if detail else 404)
             else:
                 self._send_json({"error": "not_found", "message": "요청한 API를 찾을 수 없습니다."}, status=404)
-        except Exception:
+        except Exception as exc:
+            traceback.print_exc()
             self._send_json({"error": "server_error", "message": "서버 처리 중 오류가 발생했습니다."}, status=500)
 
     def do_POST(self) -> None:
@@ -1691,9 +2186,9 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/admin/bot/reset-error":
                 self._send_json(reset_bot_error())
             elif path == "/api/admin/llama/reconnect":
-                self._send_json(ensure_llama(start_command=True))
+                self._send_json(ensure_llama(start_command=True, user_requested=True))
             elif path == "/api/admin/llama/start":
-                self._send_json(ensure_llama(start_command=True))
+                self._send_json(ensure_llama(start_command=True, user_requested=True))
             elif path == "/api/admin/llama/stop":
                 self._send_json(stop_llama())
             elif path == "/api/social/news/candidates/delete":
@@ -1715,6 +2210,17 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/social/news/candidates/cleanup-links":
                 payload = self._read_json()
                 self._send_json(cleanup_candidate_article_data(payload if isinstance(payload, dict) else {}))
+            elif path == "/api/admin/content/sync":
+                payload = self._read_json()
+                limit = int(payload.get("limit") or 200) if isinstance(payload, dict) else 200
+                self._send_json(content_service().sync_all(limit=max(1, min(limit, 1000))))
+            elif path.startswith("/api/admin/content/candidates/") and path.endswith("/publish"):
+                raw_id = path.split("/")[-2]
+                payload = self._read_json()
+                dry_run = True
+                if isinstance(payload, dict) and "dryRun" in payload:
+                    dry_run = bool(payload.get("dryRun"))
+                self._send_json(content_service().publish(int(raw_id), dry_run=dry_run))
             elif path == "/api/admin/occupation/jobs/collect":
                 payload = self._read_json()
                 self._send_json(run_occupation_job_collection(payload if isinstance(payload, dict) else {}))
@@ -1726,6 +2232,22 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(occupation_repository().upsert_keyword_mapping(payload if isinstance(payload, dict) else {}))
             elif path == "/api/admin/occupation/keyword-mappings/generate":
                 self._send_json(occupation_repository().generate_keyword_mappings())
+            elif path == "/api/admin/immigration/collect":
+                payload = self._read_json()
+                self._send_json(immigration_collect(payload if isinstance(payload, dict) else {}))
+            elif path.startswith("/api/admin/immigration/collect/"):
+                payload = self._read_json()
+                source = path.rsplit("/", 1)[-1]
+                self._send_json(immigration_collect(payload if isinstance(payload, dict) else {}, source=source))
+            elif path.startswith("/api/admin/immigration/notices/") and path.endswith("/summarize"):
+                raw_id = path.split("/")[-2]
+                self._send_json(immigration_service().summarize(int(raw_id)))
+            elif path.startswith("/api/admin/immigration/notices/") and path.endswith("/approve"):
+                raw_id = path.split("/")[-2]
+                self._send_json(immigration_service().approve(int(raw_id)))
+            elif path.startswith("/api/admin/immigration/notices/") and path.endswith("/publish"):
+                raw_id = path.split("/")[-2]
+                self._send_json(immigration_service().publish_stub(int(raw_id)))
             elif path == "/api/admin/job-collector/run":
                 self._send_json(start_job_collection(smoke=False))
             elif path == "/api/admin/job-collector/smoke-test":
@@ -1736,7 +2258,8 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(stop_job_scheduler())
             else:
                 self._send_json({"error": "not_found", "message": "요청한 API를 찾을 수 없습니다."}, status=404)
-        except Exception:
+        except Exception as exc:
+            traceback.print_exc()
             self._send_json({"error": "server_error", "message": "서버 처리 중 오류가 발생했습니다."}, status=500)
 
     def do_PUT(self) -> None:
@@ -1757,7 +2280,8 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(occupation_repository().upsert_keyword_mapping(payload if isinstance(payload, dict) else {}, item_id=int(raw_id)))
             else:
                 self._send_json({"error": "not_found", "message": "요청한 API를 찾을 수 없습니다."}, status=404)
-        except Exception:
+        except Exception as exc:
+            traceback.print_exc()
             self._send_json({"error": "server_error", "message": "서버 처리 중 오류가 발생했습니다."}, status=500)
 
     def _is_public_get(self, path: str) -> bool:
@@ -1793,15 +2317,16 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             row = fetch_one(
                 """
                 UPDATE admin.admin_login_session
-                SET last_seen_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                SET ip_address = %s,
+                    user_agent = %s,
+                    last_seen_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE id = %s
                   AND device_id = %s
-                  AND ip_address = %s
-                  AND user_agent = %s
                   AND status = 'APPROVED'
                 RETURNING id
                 """,
-                (session_id, device_id, ip_address, user_agent),
+                (ip_address, user_agent, session_id, device_id),
             )
             if row:
                 return True
@@ -1985,13 +2510,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
         return
 
 
-def main(argv: list[str] | None = None) -> int:
-    load_env_file()
-    parser = argparse.ArgumentParser(description="Run the WorkConnect admin API server.")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
-    args = parser.parse_args(argv)
-
+def initialize_admin_runtime() -> None:
     ensure_auth_schema()
     ignored_storage_keys = (
         "NEWS_BOT_" + "STORAGE",
@@ -2007,6 +2526,7 @@ def main(argv: list[str] | None = None) -> int:
         f"Facebook runtime config: page_id={facebook_config['page_id'] or '-'}, "
         f"token_env={facebook_config['page_token_env_key']}, "
         f"page_token={facebook_config['page_token_masked'] or '-'}, "
+        f"fingerprint={facebook_config['page_token_fingerprint'] or '-'}, "
         f"user_token_present={facebook_config['user_token_present']}"
     )
     print(f"[facebook] {facebook_config_message}", flush=True)
@@ -2024,9 +2544,20 @@ def main(argv: list[str] | None = None) -> int:
         print("[job-collector] persisted scheduler flag found; restarting scheduler", flush=True)
         start_job_scheduler()
     print(f"[llama] {ensure_llama(start_command=True)['message']}", flush=True)
+    start_article_cleanup_scheduler()
     start_telegram_update_poller()
+
+
+def main(argv: list[str] | None = None) -> int:
+    load_env_file()
+    parser = argparse.ArgumentParser(description="Run the WorkConnect admin API server.")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8765)
+    args = parser.parse_args(argv)
+
     server = ThreadingHTTPServer((args.host, args.port), AdminRequestHandler)
     print(f"Admin API listening on http://{args.host}:{args.port}")
+    threading.Thread(target=initialize_admin_runtime, name="admin-runtime-init", daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

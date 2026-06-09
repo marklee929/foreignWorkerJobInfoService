@@ -50,9 +50,12 @@ class FacebookPageClient:
             "response_body": self._safe_body(payload),
         }
 
-    def publish(self, message: str, page_id: str, access_token: str) -> dict:
+    def publish(self, message: str, page_id: str, access_token: str, link: str = "") -> dict:
         url = f"{self.graph_base_url}/{page_id}/feed"
-        body = urlencode({"message": message, "access_token": access_token}).encode("utf-8")
+        payload = {"message": message, "access_token": access_token}
+        if link:
+            payload["link"] = link
+        body = urlencode(payload).encode("utf-8")
         request = Request(url, data=body, method="POST")
         try:
             with urlopen(request, timeout=self.timeout) as response:

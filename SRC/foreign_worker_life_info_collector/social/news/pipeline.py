@@ -5,15 +5,27 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from ...utils.date_utils import utc_now_iso
+from .collector.article_text_extractor import fetch_article_metadata
 from .collector.google_news_collector import GoogleNewsCollector
+from .collector.google_news_url_resolver import is_acceptable_source_url, resolve_google_news_url
 from .collector.naver_news_collector import NaverNewsCollector
 from .duplicate_guard.duplicate_detector import check_duplicate
 from .duplicate_guard.llama_duplicate_checker import LlamaDuplicateChecker
-from .evaluator.candidate_evaluator import CandidateEvaluator
+from .category_rotation import (
+    GROUP_THRESHOLDS,
+    category_group,
+    group_threshold,
+    recent_category_ratio,
+    rotation_score,
+    selection_payload_extra,
+    target_group,
+)
+from .evaluator.candidate_evaluator import CandidateEvaluator, NEGATIVE_INCIDENT_TERMS, has_korean_text
 from .models import DuplicateCheckResult, NewsCandidate, NewsItem
 from .normalizer.news_normalizer import normalize_news_item
 from .notifier.telegram_notifier import NewsTelegramNotifier
@@ -60,6 +72,25 @@ class NewsPipeline:
         self.facebook_publisher = facebook_publisher or FacebookPublisher()
         self.telegram_notifier = telegram_notifier or NewsTelegramNotifier()
 
+    def apply_evaluation(self, candidate: NewsCandidate, evaluation) -> NewsCandidate:
+        candidate.evaluation_score = evaluation.total_score
+        candidate.duplicate_risk_score = evaluation.duplicate_risk_score
+        candidate.foreign_worker_relevance_score = evaluation.foreign_worker_relevance_score
+        candidate.korea_relevance_score = evaluation.korea_relevance_score
+        candidate.visa_or_labor_policy_score = evaluation.visa_or_labor_policy_score
+        candidate.freshness_score = evaluation.freshness_score
+        candidate.source_reliability_score = evaluation.source_reliability_score
+        candidate.facebook_post_suitability_score = evaluation.facebook_post_suitability_score
+        candidate.settlement_relevance_score = evaluation.settlement_relevance_score
+        candidate.practical_value_score = evaluation.practical_value_score
+        candidate.content_potential_score = evaluation.content_potential_score
+        candidate.is_sensitive = evaluation.is_sensitive
+        candidate.review_required_reason = evaluation.review_required_reason
+        candidate.score_threshold = evaluation.threshold
+        candidate.score_breakdown_json = evaluation.score_breakdown_json
+        candidate.risk_level = "HIGH" if evaluation.duplicate_risk_score >= 0.85 else candidate.risk_level or "LOW"
+        return candidate
+
     def run(self, keyword: str = "foreign worker visa Korea", dry_run: bool = False, limit: int = 5) -> dict:
         cycle_id = today_cycle_id()
         self.ensure_publish_cycle_metadata()
@@ -74,6 +105,7 @@ class NewsPipeline:
         self.restore_today_safe_skipped_candidates(minimum_safe_score=minimum_safe_score)
         self.repository.insert_pipeline_log("score", "STARTED", f"신규 후보 {len(saved_candidates)}건 기준 최소 안전 점수 {minimum_safe_score:.0f}점")
         processed_candidates = [self.process_candidate(candidate, dry_run=dry_run, threshold=minimum_safe_score) for candidate in saved_candidates]
+        self.repair_recent_missing_url_candidates(minimum_safe_score=minimum_safe_score, dry_run=dry_run)
 
         cooldown = self.publish_cooldown_info()
         if not dry_run and cooldown["active"]:
@@ -209,6 +241,7 @@ class NewsPipeline:
             )
             return candidate
         self.repository.insert_pipeline_log("article", "STARTED", f"기사 처리 시작: {candidate.title}", candidate.id)
+        candidate = self.recover_article_source(candidate)
         validation_error = self.validate_text(candidate)
         if validation_error:
             candidate.status = "TEXT_INVALID"
@@ -245,6 +278,7 @@ class NewsPipeline:
             candidate.publish_status = "DUPLICATE"
             candidate.duplicate_group_id = duplicate_result.duplicate_group_id
             candidate.duplicate_risk_score = duplicate_result.duplicate_risk_score
+            candidate.is_representative = False
             candidate.skip_reason = f"중복 기사 제외: {duplicate_result.reason}"
             candidate.risk_notes = _append_note(candidate.risk_notes, candidate.skip_reason)
             self.repository.insert_pipeline_log("duplicate_check", "SKIPPED", f"중복 기사 제외: {candidate.title}", candidate.id)
@@ -260,6 +294,11 @@ class NewsPipeline:
         candidate.freshness_score = evaluation.freshness_score
         candidate.source_reliability_score = evaluation.source_reliability_score
         candidate.facebook_post_suitability_score = evaluation.facebook_post_suitability_score
+        candidate.settlement_relevance_score = evaluation.settlement_relevance_score
+        candidate.practical_value_score = evaluation.practical_value_score
+        candidate.content_potential_score = evaluation.content_potential_score
+        candidate.is_sensitive = evaluation.is_sensitive
+        candidate.review_required_reason = evaluation.review_required_reason
         candidate.score_threshold = evaluation.threshold
         candidate.score_breakdown_json = evaluation.score_breakdown_json
         candidate.risk_level = "HIGH" if evaluation.duplicate_risk_score >= 0.85 else "LOW"
@@ -275,6 +314,76 @@ class NewsPipeline:
         self.repository.insert_pipeline_log("score", "COMPLETED", f"점수 평가 완료: {candidate.title} ({candidate.evaluation_score:.0f}/{threshold:.0f})", candidate.id)
         return self.repository.update_candidate(candidate)
 
+    def recover_article_source(self, candidate: NewsCandidate) -> NewsCandidate:
+        if candidate.source_url and candidate.content:
+            return candidate
+
+        source_url = candidate.source_url.strip()
+        recovery_source = ""
+        if not source_url:
+            source_url = self.repository.find_existing_article_url(candidate)
+            if source_url:
+                recovery_source = "existing_article_url"
+
+        if not source_url and candidate.google_news_url:
+            resolved_url = resolve_google_news_url(candidate.google_news_url, timeout=10)
+            if is_acceptable_source_url(resolved_url):
+                source_url = resolved_url
+                recovery_source = "google_news_resolver"
+
+        if not source_url:
+            guessed_url = guess_article_url_from_source(candidate)
+            if guessed_url:
+                source_url = guessed_url
+                recovery_source = "source_title_guess"
+
+        if source_url:
+            candidate.source_url = source_url
+            candidate.canonical_url = candidate.canonical_url or source_url
+            if "URL" in (candidate.fail_reason or "") or "원문" in (candidate.fail_reason or ""):
+                candidate.fail_reason = ""
+            if "URL" in (candidate.skip_reason or "") or "원문" in (candidate.skip_reason or ""):
+                candidate.skip_reason = ""
+
+        content_status = "FETCHED" if candidate.content else "URL_MISSING"
+        content_error = ""
+        if candidate.source_url and (not candidate.content or len(candidate.content) < 200):
+            try:
+                metadata = fetch_article_metadata(candidate.source_url, timeout=12)
+                if metadata.canonical_url and is_acceptable_source_url(metadata.canonical_url):
+                    candidate.source_url = metadata.canonical_url
+                    candidate.canonical_url = metadata.canonical_url
+                if metadata.content:
+                    candidate.content = metadata.content
+                    content_status = "FETCHED" if len(metadata.content) >= 120 else "PARTIAL"
+                else:
+                    content_status = "FAILED"
+                    content_error = "content empty"
+                if metadata.image_url:
+                    candidate.image_url = metadata.image_url
+                if metadata.image_urls:
+                    candidate.image_urls = metadata.image_urls
+                if metadata.publisher_name:
+                    candidate.publisher_name = metadata.publisher_name
+            except Exception as exc:
+                content_status = "FAILED"
+                content_error = str(exc)[:300]
+
+        if candidate.source_url or content_error or content_status != "URL_MISSING":
+            self.repository.update_article_recovery(candidate, content_status, content_error)
+            if recovery_source:
+                self.repository.insert_pipeline_log(
+                    "article_recovery",
+                    "COMPLETED",
+                    f"source recovered from {recovery_source}: {candidate.source_url}",
+                    candidate.id,
+                )
+            elif content_status in {"FETCHED", "PARTIAL"}:
+                self.repository.insert_pipeline_log("article_recovery", "COMPLETED", "article content refreshed", candidate.id)
+            elif content_error:
+                self.repository.insert_pipeline_log("article_recovery", "FAILED", content_error, candidate.id)
+        return candidate
+
     def validate_text(self, candidate: NewsCandidate) -> str:
         text = " ".join(part for part in (candidate.title, candidate.summary, candidate.content) if part).strip()
         if not candidate.title.strip():
@@ -286,7 +395,11 @@ class NewsPipeline:
         lowered = text.lower()
         if any(term in lowered for term in ("casino", "coupon", "lottery", "click here", "advertorial")):
             return "광고성 또는 스팸성 기사입니다."
-        relevance_terms = ("foreign worker", "migrant", "visa", "korea", "e-9", "e-7", "employment", "labor", "immigration")
+        relevance_terms = (
+            "foreign worker", "migrant", "visa", "korea", "e-9", "e-7", "employment", "labor", "immigration",
+            "foreigners in korea", "foreign residents", "living in korea", "housing", "bank", "health insurance",
+            "transportation", "korean language", "cost of living", "support center", "settlement", "safety",
+        )
         if not any(term in lowered for term in relevance_terms):
             return "한국 외국인 취업/비자/생활/노동 정보 관련성이 부족합니다."
         self.repository.insert_pipeline_log("text_validation", "COMPLETED", f"텍스트 검증 완료: {candidate.title}", candidate.id)
@@ -370,6 +483,18 @@ class NewsPipeline:
                 "COMPLETED",
                 f"게시 후보 선택: {selected.title} (base {selected_score['base_score']:.0f}, final {selected_score['final_score']:.0f}, 후보 {len(publishable)}건)",
                 selected.id,
+                payload_json=selection_payload_extra(
+                    {
+                        "target_category_group": target,
+                        "selected_category": selected.content_category,
+                        "primary_candidate_count": len(pools["PRIMARY"]),
+                        "secondary_candidate_count": len(pools["SECONDARY"]),
+                        "tertiary_candidate_count": len(pools["TERTIARY"]),
+                        "recent_24h_category_ratio": recent_counts,
+                        "category_selection_reason": selected.category_selection_reason,
+                        "fallback_used": fallback_used,
+                    }
+                ),
             )
 
         return {
@@ -400,9 +525,19 @@ class NewsPipeline:
     def evaluate_publish_candidates_v2(self, cycle_id: str, dry_run: bool = False) -> dict:
         now = datetime.now(timezone.utc)
         cycle_id = today_cycle_id(now)
+        window_start = self.publish_window_start(now)
+        window_start_iso = window_start.isoformat()
         recent_cutoff = now - timedelta(hours=1)
-        all_candidates = self.repository.list_publish_candidates_for_cycle(cycle_id, limit=1000)
-        today_all_candidates = [candidate for candidate in self.repository.list_candidates() if candidate.cycle_id == cycle_id]
+        window_candidates = self.repository.list_publish_candidates_since(window_start_iso, limit=1000)
+        queue_candidates = self.repository.list_publish_queue(limit=1000)
+        candidate_map = {candidate.id: candidate for candidate in queue_candidates if candidate.id is not None}
+        candidate_map.update({candidate.id: candidate for candidate in window_candidates if candidate.id is not None})
+        all_candidates = list(candidate_map.values())
+        today_all_candidates = [
+            candidate
+            for candidate in self.repository.list_candidates()
+            if parse_iso(candidate.collected_at) >= window_start or candidate.id in candidate_map
+        ]
         today_unposted_candidates = [
             candidate
             for candidate in today_all_candidates
@@ -436,26 +571,68 @@ class NewsPipeline:
         selected_from_status = ""
         publishable: list[dict] = []
 
-        for label, threshold in thresholds:
-            scored = [
-                self.score_publish_candidate(candidate, now=now, today_avg_score=today_avg_score, recent_ids=recent_ids, facebook_posts=facebook_posts)
-                for candidate in prepared_candidates
-            ]
-            publishable = [item for item in scored if item["base_score"] >= threshold and not item["blocked"]]
-            publishable.sort(
-                key=lambda item: (
-                    item["final_score"],
-                    1 if item["is_recent"] else 0,
-                    item["base_score"],
-                    parse_iso(item["collected_at"]),
-                ),
-                reverse=True,
+        recent_published = self.repository.list_recent_published(limit=50)
+        recent_24h_published = [candidate for candidate in recent_published if now - parse_iso(candidate.published_at or candidate.collected_at) <= timedelta(hours=24)]
+        recent_counts = recent_category_ratio(recent_24h_published)
+        last_group = ""
+        if recent_published:
+            last_group = recent_published[0].content_priority_group or category_group(recent_published[0].content_category or recent_published[0].category)
+
+        scored = [
+            self.score_publish_candidate(
+                candidate,
+                now=now,
+                today_avg_score=today_avg_score,
+                recent_ids=recent_ids,
+                facebook_posts=facebook_posts,
+                recent_category_counts=recent_counts,
+                last_category_group=last_group,
             )
+            for candidate in prepared_candidates
+        ]
+        safe_scored = [item for item in scored if not item["blocked"]]
+        pools = {
+            "PRIMARY": [item for item in safe_scored if item["priority_group"] == "PRIMARY"],
+            "SECONDARY": [item for item in safe_scored if item["priority_group"] == "SECONDARY"],
+            "TERTIARY": [item for item in safe_scored if item["priority_group"] == "TERTIARY"],
+        }
+        target, category_reason = target_group(len(pools["PRIMARY"]), len(pools["SECONDARY"]), recent_counts, last_group)
+        fallback_used = False
+        for group in [target] + [item for item in ("PRIMARY", "SECONDARY", "TERTIARY") if item != target]:
+            for relaxed in (False, True):
+                threshold = group_threshold(group, relaxed=relaxed)
+                publishable = [item for item in pools[group] if item["base_score"] >= threshold]
+                publishable.sort(
+                    key=lambda item: (
+                        item["final_score"],
+                        item["category_rotation_score"],
+                        1 if item["is_recent"] else 0,
+                        item["base_score"],
+                        parse_iso(item["collected_at"]),
+                    ),
+                    reverse=True,
+                )
+                if publishable:
+                    selected_score = publishable[0]
+                    selected = selected_score["candidate"]
+                    threshold_used = threshold
+                    fallback_used = group != target or relaxed
+                    break
+            if selected:
+                break
+
+        if not selected:
+            publishable = [
+                item
+                for item in safe_scored
+                if item["base_score"] >= GROUP_THRESHOLDS.get(item["priority_group"], GROUP_THRESHOLDS["PRIMARY"])["floor"]
+            ]
+            publishable.sort(key=lambda item: (item["final_score"], item["base_score"], parse_iso(item["collected_at"])), reverse=True)
             if publishable:
                 selected_score = publishable[0]
                 selected = selected_score["candidate"]
-                threshold_used = threshold
-                break
+                threshold_used = GROUP_THRESHOLDS.get(selected_score["priority_group"], GROUP_THRESHOLDS["PRIMARY"])["floor"]
+                fallback_used = True
 
         if selected:
             selected_from_status = selected.publish_status or selected.status
@@ -465,6 +642,12 @@ class NewsPipeline:
                 selected.publish_status = "READY_TO_PUBLISH"
                 selected.score_threshold = threshold_used
                 selected.selection_reason = selected.selection_reason or f"게시 후보 재평가에서 threshold {threshold_used:.0f}점 기준을 통과했습니다."
+                selected.category_rotation_score = selected_score.get("category_rotation_score", 0)
+                selected.category_selection_reason = selected_score.get("category_selection_reason", category_reason)
+                selected.selection_reason = (
+                    f"{selected.category_selection_reason} "
+                    f"{selected.content_priority_group}/{selected.content_category} 후보가 threshold {threshold_used:.0f}점을 통과했습니다."
+                )
                 selected.skip_reason = ""
                 if not dry_run:
                     self.repository.update_candidate(selected)
@@ -487,6 +670,7 @@ class NewsPipeline:
         final_top = publishable[:10] if publishable else []
         return {
             "cycle_id": cycle_id,
+            "publish_window_start": window_start_iso,
             "ready_count": len(ready_candidates),
             "retryable_count": len(retryable_candidates),
             "recent_pool_count": len(recent_pool),
@@ -498,7 +682,14 @@ class NewsPipeline:
             "today_avg_score": today_avg_score,
             "minimum_safe_score": self.minimum_publish_score(),
             "threshold_used": threshold_used,
-            "threshold_sequence": [{"label": label, "threshold": threshold} for label, threshold in thresholds],
+            "threshold_sequence": [{"label": group, "threshold": group_threshold(group, relaxed=False), "relaxed_threshold": group_threshold(group, relaxed=True)} for group in ("PRIMARY", "SECONDARY", "TERTIARY")],
+            "target_category_group": target,
+            "selected_category": selected.content_category if selected else "",
+            "primary_candidate_count": len(pools["PRIMARY"]),
+            "secondary_candidate_count": len(pools["SECONDARY"]),
+            "tertiary_candidate_count": len(pools["TERTIARY"]),
+            "recent_24h_category_ratio": recent_counts,
+            "category_selection_reason": selected.category_selection_reason if selected else category_reason,
             "selected_candidate": selected,
             "selected_score": selected_score,
             "selected_from_status": selected_from_status,
@@ -507,17 +698,24 @@ class NewsPipeline:
             "no_publish_code": no_publish_code,
             "no_publish_reason": no_publish_reason,
             "remaining_ready_count": remaining_ready_count,
-            "fallback_used": bool(expanded_candidates),
+            "fallback_used": fallback_used or bool(expanded_candidates),
             "promoted_to_ready": promoted_to_ready,
             "cooldown_remaining": 0,
             "dry_run_evaluation": {
                 "ready_count": len(ready_candidates),
+                "publish_window_start": window_start_iso,
                 "retryable_count": len(retryable_candidates),
                 "expanded_candidate_count": len(expanded_candidates),
                 "today_article_count": today_article_count,
                 "today_unposted_count": today_unposted_count,
                 "minimum_safe_score": self.minimum_publish_score(),
                 "threshold_used": threshold_used,
+                "target_category_group": target,
+                "primary_candidate_count": len(pools["PRIMARY"]),
+                "secondary_candidate_count": len(pools["SECONDARY"]),
+                "tertiary_candidate_count": len(pools["TERTIARY"]),
+                "recent_24h_category_ratio": recent_counts,
+                "category_selection_reason": selected.category_selection_reason if selected else category_reason,
                 "selected_candidate": self.score_summary(selected_score) if selected_score else None,
                 "promoted_to_ready": promoted_to_ready,
                 "publish_attempted": False,
@@ -531,6 +729,11 @@ class NewsPipeline:
     def prepare_publish_candidates(self, candidates: list[NewsCandidate], dry_run: bool = False) -> list[NewsCandidate]:
         prepared: list[NewsCandidate] = []
         for candidate in candidates:
+            if not candidate.content_priority_group or not candidate.content_category:
+                evaluation = self.evaluator.evaluate(candidate, threshold=max(40.0, float(candidate.score_threshold or 40.0)))
+                self.apply_evaluation(candidate, evaluation)
+                if not dry_run:
+                    self.repository.update_candidate(candidate)
             if int(candidate.publish_attempt_count or 0) >= 3:
                 candidate.status = "AUTO_RETRY_BLOCKED"
                 candidate.publish_status = "AUTO_RETRY_BLOCKED"
@@ -550,6 +753,11 @@ class NewsPipeline:
                 candidate.freshness_score = evaluation.freshness_score
                 candidate.source_reliability_score = evaluation.source_reliability_score
                 candidate.facebook_post_suitability_score = evaluation.facebook_post_suitability_score
+                candidate.settlement_relevance_score = evaluation.settlement_relevance_score
+                candidate.practical_value_score = evaluation.practical_value_score
+                candidate.content_potential_score = evaluation.content_potential_score
+                candidate.is_sensitive = evaluation.is_sensitive
+                candidate.review_required_reason = evaluation.review_required_reason
                 candidate.score_threshold = 40.0
                 candidate.score_breakdown_json = evaluation.score_breakdown_json
                 candidate.risk_level = "HIGH" if evaluation.duplicate_risk_score >= 0.85 else candidate.risk_level or "LOW"
@@ -584,11 +792,18 @@ class NewsPipeline:
         return result or [("SAFE_40", 40.0)]
 
     def cooldown_selection(self, cycle_id: str, cooldown: dict) -> dict:
-        ready_candidates = self.repository.list_ready_for_cycle(cycle_id, limit=500)
-        candidate_pool = self.repository.list_publish_candidates_for_cycle(cycle_id, limit=1000)
+        window_start = self.publish_window_start()
+        window_start_iso = window_start.isoformat()
+        ready_candidates = self.repository.list_publish_queue(limit=500)
+        window_candidates = self.repository.list_publish_candidates_since(window_start_iso, limit=1000)
+        candidate_map = {candidate.id: candidate for candidate in ready_candidates if candidate.id is not None}
+        candidate_map.update({candidate.id: candidate for candidate in window_candidates if candidate.id is not None})
+        candidate_pool = list(candidate_map.values())
         remaining = int(cooldown.get("remaining_seconds", 0) or 0)
+        cooldown_minutes = int(cooldown.get("cooldown_minutes") or self.publish_cooldown_minutes())
         return {
             "cycle_id": cycle_id,
+            "publish_window_start": window_start_iso,
             "ready_count": len(ready_candidates),
             "retryable_count": len([candidate for candidate in candidate_pool if candidate.publish_status == "FAILED_RETRYABLE" or candidate.status == "FAILED_RETRYABLE"]),
             "recent_pool_count": 0,
@@ -608,7 +823,7 @@ class NewsPipeline:
             "publish_result": "WAITING_COOLDOWN",
             "no_publish_code": "WAITING_COOLDOWN",
             "no_publish_reason": (
-                f"Facebook 게시 대기: 마지막 게시 후 60분 쿨다운 적용 중입니다. "
+                f"Facebook 게시 대기: 마지막 게시 후 {cooldown_minutes}분 쿨다운 적용 중입니다. "
                 f"READY 후보 {len(ready_candidates)}건, 게시 가능 시간 {cooldown.get('next_publish_at', '-')}, "
                 f"남은 시간 {int((remaining + 59) // 60)}분"
             ),
@@ -632,6 +847,11 @@ class NewsPipeline:
                 candidate.freshness_score = evaluation.freshness_score
                 candidate.source_reliability_score = evaluation.source_reliability_score
                 candidate.facebook_post_suitability_score = evaluation.facebook_post_suitability_score
+                candidate.settlement_relevance_score = evaluation.settlement_relevance_score
+                candidate.practical_value_score = evaluation.practical_value_score
+                candidate.content_potential_score = evaluation.content_potential_score
+                candidate.is_sensitive = evaluation.is_sensitive
+                candidate.review_required_reason = evaluation.review_required_reason
                 candidate.score_threshold = 40.0
                 candidate.score_breakdown_json = evaluation.score_breakdown_json
                 candidate.risk_level = "HIGH" if evaluation.duplicate_risk_score >= 0.85 else candidate.risk_level or "LOW"
@@ -666,22 +886,37 @@ class NewsPipeline:
             return selected, threshold
         return None, 40.0
 
-    def required_publish_safety_error(self, candidate: NewsCandidate) -> str:
+    def required_publish_safety_error(self, candidate: NewsCandidate, now: datetime | None = None) -> str:
+        now = now or datetime.now(timezone.utc)
         if not candidate.title.strip():
-            return "제목 없음"
+            return "Title is missing."
         if not candidate.source_url.strip():
-            return "원문 URL 없음"
-        if candidate.status in {"DUPLICATE", "TEXT_INVALID", "POSTED", "PUBLISHED", "NOTIFIED", "POST_EXPIRED", "ARCHIVED", "AUTO_RETRY_BLOCKED"}:
-            return f"게시 제외 상태: {candidate.status}"
-        if candidate.publish_status in {"DUPLICATE", "TEXT_INVALID", "POSTED", "PUBLISHED", "NOTIFIED", "POST_EXPIRED", "ARCHIVED", "AUTO_RETRY_BLOCKED"}:
-            return f"게시 제외 상태: {candidate.publish_status}"
+            return "Article URL is missing."
+        if candidate.status in {"DUPLICATE", "TEXT_INVALID", "REVIEW_REQUIRED", "POSTED", "PUBLISHED", "NOTIFIED", "POST_EXPIRED", "ARCHIVED", "AUTO_RETRY_BLOCKED"}:
+            return f"Excluded status: {candidate.status}"
+        if candidate.publish_status in {"DUPLICATE", "TEXT_INVALID", "REVIEW_REQUIRED", "POSTED", "PUBLISHED", "NOTIFIED", "POST_EXPIRED", "ARCHIVED", "AUTO_RETRY_BLOCKED"}:
+            return f"Excluded publish status: {candidate.publish_status}"
         if candidate.risk_level == "HIGH":
-            return "고위험 후보"
+            return "High-risk candidate."
+        if candidate.is_sensitive:
+            return candidate.review_required_reason or "Sensitive article requires manual review."
+        if parse_iso(candidate.collected_at) < self.publish_window_start(now):
+            return "Candidate is outside the rolling 24-hour publishing window."
         text = f"{candidate.title} {candidate.summary} {candidate.content} {candidate.short_summary} {candidate.relevance_reason}".lower()
-        if not any(term in text for term in ("foreign worker", "migrant", "visa", "korea", "employment", "labor", "immigration", "e-9", "e-7")):
-            return "외국인 근로자/비자/고용 관련성 부족"
+        generated_text = f"{candidate.generated_summary_en} {candidate.generated_why_it_matters_en}"
+        if has_korean_text(generated_text, max_hangul_chars=6):
+            return "Generated Facebook message contains Korean text."
+        if any(term in text for term in NEGATIVE_INCIDENT_TERMS):
+            return "Negative incident/crime article."
+        practical_life_candidate = (
+            candidate.content_priority_group in {"SECONDARY", "TERTIARY"}
+            and candidate.settlement_relevance_score >= 0.25
+            and candidate.practical_value_score >= 0.15
+        )
+        if not practical_life_candidate and not any(term in text for term in ("foreign worker", "migrant", "visa", "korea", "employment", "labor", "immigration", "e-9", "e-7")):
+            return "Not directly related to foreign workers, visas, jobs, or labor in Korea."
         if any(term in text for term in ("casino", "coupon", "lottery", "click here", "advertorial")):
-            return "광고성 또는 스팸성 표현"
+            return "Advertising or spam-like text."
         return ""
 
     def score_publish_candidate(
@@ -691,6 +926,8 @@ class NewsPipeline:
         today_avg_score: float,
         recent_ids: set[int | None],
         facebook_posts: list[dict],
+        recent_category_counts: dict[str, int] | None = None,
+        last_category_group: str = "",
     ) -> dict:
         base_score = float(candidate.evaluation_score or 0.0)
         is_recent = candidate.id in recent_ids or now - parse_iso(candidate.collected_at) <= timedelta(hours=1)
@@ -704,8 +941,14 @@ class NewsPipeline:
         )
         duplication_penalty = 30.0 if float(candidate.duplicate_risk_score or 0.0) >= 0.6 else 0.0
         risk_penalty = self.risk_penalty(candidate)
-        final_score = base_score + freshness_score + backlog_bonus + engagement_score + group_signal_score - duplication_penalty - risk_penalty
-        blocked = candidate.risk_level == "HIGH" or not candidate.source_url or duplication_penalty >= 30.0
+        safety_error = self.required_publish_safety_error(candidate, now)
+        priority_group = candidate.content_priority_group or category_group(candidate.content_category or candidate.category)
+        category_bonus = rotation_score(candidate, recent_category_counts or {}, last_category_group)
+        candidate.category_rotation_score = category_bonus
+        if not candidate.category_selection_reason:
+            candidate.category_selection_reason = f"{priority_group} category rotation score {category_bonus:+.0f} applied."
+        final_score = base_score + freshness_score + backlog_bonus + engagement_score + group_signal_score + category_bonus - duplication_penalty - risk_penalty
+        blocked = bool(safety_error) or candidate.risk_level == "HIGH" or not candidate.source_url or duplication_penalty >= 30.0
         return {
             "candidate": candidate,
             "id": candidate.id,
@@ -718,9 +961,14 @@ class NewsPipeline:
             "group_signal_score": round(group_signal_score, 2),
             "duplication_penalty": round(duplication_penalty, 2),
             "risk_penalty": round(risk_penalty, 2),
+            "category_rotation_score": round(category_bonus, 2),
+            "category_selection_reason": candidate.category_selection_reason,
+            "content_category": candidate.content_category or candidate.category,
+            "priority_group": priority_group,
             "final_score": round(final_score, 2),
             "is_recent": is_recent,
             "blocked": blocked,
+            "blocked_reason": safety_error,
             "breakdown": {
                 "base_score": round(base_score, 2),
                 "freshness_score": round(freshness_score, 2),
@@ -729,6 +977,9 @@ class NewsPipeline:
                 "group_signal_score": round(group_signal_score, 2),
                 "duplication_penalty": round(duplication_penalty, 2),
                 "risk_penalty": round(risk_penalty, 2),
+                "category_rotation_score": round(category_bonus, 2),
+                "content_category": candidate.content_category or candidate.category,
+                "priority_group": priority_group,
                 "final_score": round(final_score, 2),
                 "today_avg_score": today_avg_score,
             },
@@ -744,6 +995,9 @@ class NewsPipeline:
             "freshness_score": score["freshness_score"],
             "engagement_prediction_score": score["engagement_prediction_score"],
             "group_signal_score": score.get("group_signal_score", 0),
+            "category_rotation_score": score.get("category_rotation_score", 0),
+            "content_category": score.get("content_category", ""),
+            "priority_group": score.get("priority_group", ""),
             "final_score": score["final_score"],
             "collected_at": score["collected_at"],
         }
@@ -864,6 +1118,7 @@ class NewsPipeline:
         error_message = publish_result.get("error_message", "")
         message_preview = publish_result.get("message", "")[:1000]
         token_debug = publish_result.get("token_debug") or {}
+        request_payload = publish_result.get("request_payload") or {}
         if token_debug:
             self.repository.insert_pipeline_log(
                 "facebook_token_debug",
@@ -872,6 +1127,8 @@ class NewsPipeline:
                     f"Facebook token debug: type={token_debug.get('token_type') or '-'}, "
                     f"is_valid={token_debug.get('is_valid')}, "
                     f"profile_id={token_debug.get('profile_id') or '-'}, "
+                    f"fingerprint={token_debug.get('token_fingerprint') or '-'}, "
+                    f"token={token_debug.get('token_masked') or '-'}, "
                     f"expires_at={token_debug.get('expires_at') or '-'}"
                 ),
                 candidate.id,
@@ -887,10 +1144,21 @@ class NewsPipeline:
             threshold=candidate.score_threshold,
             message_preview=message_preview,
             response_code=publish_result.get("response_code", ""),
-            response_body=json.dumps({"facebook_response": publish_result.get("response_body", ""), "token_debug": token_debug}, ensure_ascii=False),
+            response_body=json.dumps(
+                {
+                    "facebook_response": publish_result.get("response_body", ""),
+                    "token_debug": token_debug,
+                    "facebook_link_url": publish_result.get("facebook_link_url", ""),
+                    "link_valid_yn": publish_result.get("link_valid_yn", False),
+                    "link_reject_reason": publish_result.get("link_reject_reason", ""),
+                    "facebook_debugger_url": request_payload.get("facebook_debugger_url", ""),
+                },
+                ensure_ascii=False,
+            ),
             error_code=error_code,
             error_message=error_message,
             published_at=timestamp,
+            request_payload=json.dumps(request_payload, ensure_ascii=False),
         )
 
         if status in ("DRY_RUN", "PUBLISHED"):
@@ -922,7 +1190,7 @@ class NewsPipeline:
                 "MISSING_FACEBOOK_ENV",
                 "MISSING_FACEBOOK_APP_TOKEN",
             }
-            next_status = "AUTO_RETRY_BLOCKED" if candidate.publish_attempt_count >= 3 else "FAILED_RETRYABLE"
+            next_status = "FAILED_RETRYABLE" if manual_repost_issue else "AUTO_RETRY_BLOCKED" if candidate.publish_attempt_count >= 3 else "FAILED_RETRYABLE"
             self.repository.mark_status(
                 candidate.id,
                 next_status,
@@ -983,23 +1251,13 @@ class NewsPipeline:
         }
 
     def expire_old_unposted_candidates(self, cycle_id: str = "") -> None:
-        expired_at = utc_now_iso()
-        expired, target_cycle_id = self.repository.expire_ready_before_cycle(cycle_id, expired_at, reason="DAILY_CYCLE_EXPIRED")
-        if expired:
+        restored = self.repository.restore_auto_expired_unposted()
+        if restored:
             self.repository.insert_pipeline_log(
-                "daily_reset",
+                "rolling_queue",
                 "COMPLETED",
-                f"이전 일일 사이클 READY 후보 {expired}건 게시 만료 처리",
-                payload_json=json.dumps(
-                    {
-                        "expired_count": expired,
-                        "target_cycle_id": target_cycle_id,
-                        "new_cycle_id": cycle_id,
-                        "expired_at": expired_at,
-                        "reason": "DAILY_CYCLE_EXPIRED",
-                    },
-                    ensure_ascii=False,
-                ),
+                f"자동 만료 처리된 미게시 후보 {restored}건을 READY_TO_PUBLISH로 복구",
+                payload_json=json.dumps({"restored_count": restored, "cycle_id": cycle_id}, ensure_ascii=False),
             )
 
     def ensure_publish_cycle_metadata(self) -> None:
@@ -1022,7 +1280,7 @@ class NewsPipeline:
             self.repository.insert_pipeline_log("daily_queue", "COMPLETED", f"게시 사이클 메타데이터 {updated}건 보정")
 
     def restore_today_safe_skipped_candidates(self, minimum_safe_score: float) -> None:
-        current_cycle_id = today_cycle_id()
+        cutoff = self.publish_window_start()
         restored = 0
         for candidate in self.repository.list_candidates():
             if candidate.status != "SKIPPED":
@@ -1031,16 +1289,68 @@ class NewsPipeline:
                 continue
             if candidate.evaluation_score < minimum_safe_score:
                 continue
-            if candidate.cycle_id != current_cycle_id:
+            if parse_iso(candidate.collected_at) < cutoff:
                 continue
             candidate.status = "READY_TO_PUBLISH"
             candidate.publish_status = "READY_TO_PUBLISH"
             candidate.post_expired = False
-            candidate.selection_reason = f"새 게시 알고리즘 적용: 최소 안전 점수 {minimum_safe_score:.0f}점 이상 후보를 오늘 대기열로 복구"
+            candidate.selection_reason = f"rolling 24시간 게시 기준 적용: 최소 안전 점수 {minimum_safe_score:.0f}점 이상 후보를 대기열로 복구"
             self.repository.update_candidate(candidate)
             restored += 1
         if restored:
-            self.repository.insert_pipeline_log("daily_queue", "COMPLETED", f"오늘 SKIPPED 후보 {restored}건을 READY_TO_PUBLISH 대기열로 복구")
+            self.repository.insert_pipeline_log("rolling_queue", "COMPLETED", f"최근 24시간 SKIPPED 후보 {restored}건을 READY_TO_PUBLISH 대기열로 복구")
+
+    def repair_recent_missing_url_candidates(self, minimum_safe_score: float, dry_run: bool = False) -> None:
+        cutoff = self.publish_window_start()
+        repaired = 0
+        for candidate in self.repository.list_candidates():
+            if parse_iso(candidate.collected_at) < cutoff:
+                continue
+            if candidate.published_at or candidate.facebook_post_url:
+                continue
+            if candidate.status in {"POSTED", "PUBLISHED", "NOTIFIED", "DRY_RUN_PUBLISHED", "DRY_RUN_NOTIFIED", "ARCHIVED", "AUTO_RETRY_BLOCKED"}:
+                continue
+            if candidate.source_url:
+                continue
+            reason_text = f"{candidate.skip_reason} {candidate.fail_reason}".lower()
+            if "url" not in reason_text and "링크" not in reason_text and "원문" not in reason_text:
+                continue
+            candidate = self.recover_article_source(candidate)
+            if self.validate_text(candidate):
+                continue
+            evaluation = self.evaluator.evaluate(candidate, threshold=minimum_safe_score)
+            candidate.evaluation_score = evaluation.total_score
+            candidate.duplicate_risk_score = evaluation.duplicate_risk_score
+            candidate.foreign_worker_relevance_score = evaluation.foreign_worker_relevance_score
+            candidate.korea_relevance_score = evaluation.korea_relevance_score
+            candidate.visa_or_labor_policy_score = evaluation.visa_or_labor_policy_score
+            candidate.freshness_score = evaluation.freshness_score
+            candidate.source_reliability_score = evaluation.source_reliability_score
+            candidate.facebook_post_suitability_score = evaluation.facebook_post_suitability_score
+            candidate.settlement_relevance_score = evaluation.settlement_relevance_score
+            candidate.practical_value_score = evaluation.practical_value_score
+            candidate.content_potential_score = evaluation.content_potential_score
+            candidate.is_sensitive = evaluation.is_sensitive
+            candidate.review_required_reason = evaluation.review_required_reason
+            candidate.score_threshold = evaluation.threshold
+            candidate.score_breakdown_json = evaluation.score_breakdown_json
+            candidate.risk_level = "HIGH" if evaluation.duplicate_risk_score >= 0.85 else "LOW"
+            if evaluation.decision == "READY_TO_PUBLISH":
+                candidate.status = "READY_TO_PUBLISH"
+                candidate.publish_status = "READY_TO_PUBLISH"
+                candidate.post_expired = False
+                candidate.skip_reason = ""
+                candidate.fail_reason = ""
+                candidate.selection_reason = evaluation.reason
+                repaired += 1
+            else:
+                candidate.status = "SKIPPED"
+                candidate.publish_status = "SKIPPED"
+                candidate.skip_reason = evaluation.reason
+            if not dry_run:
+                self.repository.update_candidate(candidate)
+        if repaired:
+            self.repository.insert_pipeline_log("article_recovery", "COMPLETED", f"최근 24시간 원문 URL 누락 후보 {repaired}건을 대기열로 복구")
 
     def is_publishable_candidate(self, candidate: NewsCandidate) -> bool:
         if candidate.status in {"READY_TO_PUBLISH", "FAILED_RETRYABLE"}:
@@ -1069,18 +1379,34 @@ class NewsPipeline:
     def unposted_expire_hours(self) -> int:
         return int(env_float("NEWS_UNPOSTED_EXPIRE_HOURS", 24.0, 6.0, 168.0))
 
+    def publish_cooldown_minutes(self) -> int:
+        return int(env_float("NEWS_PUBLISH_COOLDOWN_MINUTES", 30.0, 5.0, 180.0))
+
+    def publish_window_start(self, now: datetime | None = None) -> datetime:
+        current = now or datetime.now(timezone.utc)
+        return current - timedelta(hours=self.unposted_expire_hours())
+
     def is_publish_cooldown_active(self) -> bool:
         return self.publish_cooldown_info()["active"]
 
     def publish_cooldown_info(self) -> dict:
         last = self.repository.last_successful_facebook_publish_at()
+        cooldown_minutes = self.publish_cooldown_minutes()
         if not last:
-            return {"active": False, "last_post_at": "", "next_publish_at": "", "remaining_seconds": 0, "remaining_minutes": 0}
+            return {
+                "active": False,
+                "cooldown_minutes": cooldown_minutes,
+                "last_post_at": "",
+                "next_publish_at": "",
+                "remaining_seconds": 0,
+                "remaining_minutes": 0,
+            }
         last_at = parse_iso(last)
-        next_at = last_at + timedelta(hours=1)
+        next_at = last_at + timedelta(minutes=cooldown_minutes)
         remaining = max(0, int((next_at - datetime.now(timezone.utc)).total_seconds()))
         return {
             "active": remaining > 0,
+            "cooldown_minutes": cooldown_minutes,
             "last_post_at": last_at.astimezone(KST).strftime("%Y-%m-%d %H:%M:%S"),
             "next_publish_at": next_at.astimezone(KST).strftime("%Y-%m-%d %H:%M:%S"),
             "remaining_seconds": remaining,
@@ -1103,7 +1429,7 @@ class NewsPipeline:
             f"[WorkConnect 뉴스 자동화 - {'테스트 실행' if dry_run else '실행'}]",
             f"수집: {collected_count}",
             f"저장: {saved_count}",
-            f"오늘 READY 평균 점수: {threshold:.0f}",
+            f"최근 게시 기준 24시간 평균 점수: {threshold:.0f}",
             f"중복 제외: {sum(1 for item in final_candidates if item.status == 'DUPLICATE')}",
             f"게시 후보: {len(selected_candidates)}",
             "",
@@ -1168,6 +1494,32 @@ def is_english_article(item: NewsItem) -> bool:
     ascii_letters = sum(1 for char in letters if "a" <= char.lower() <= "z")
     hangul = sum(1 for char in text if "\uac00" <= char <= "\ud7a3")
     return ascii_letters / max(len(letters), 1) >= 0.65 and hangul <= 3
+
+
+def guess_article_url_from_source(candidate: NewsCandidate) -> str:
+    source = f"{candidate.source_name} {candidate.publisher_name} {candidate.source_type}".lower()
+    slug = article_slug(candidate.title)
+    if not slug:
+        return ""
+    if "erickson immigration" in source or "eiglaw" in source:
+        return f"https://eiglaw.com/{slug}/"
+    return ""
+
+
+def article_slug(title: str) -> str:
+    text = normalize_ascii_slug(title)
+    words = [word for word in text.split("-") if word]
+    return "-".join(words[:18])
+
+
+def normalize_ascii_slug(value: str) -> str:
+    text = normalize_slug_apostrophe(value).lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    return re.sub(r"-+", "-", text).strip("-")
+
+
+def normalize_slug_apostrophe(value: str) -> str:
+    return (value or "").replace("’", "").replace("'", "")
 
 
 def env_float(name: str, default: float, minimum: float, maximum: float) -> float:

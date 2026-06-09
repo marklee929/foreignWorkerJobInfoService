@@ -226,7 +226,7 @@ class OccupationRepository:
                     SELECT *
                     FROM occupation.{table}
                     {where_sql}
-                    ORDER BY updated_at DESC, id DESC
+                    ORDER BY {code_column} ASC, id ASC
                     LIMIT %s OFFSET %s
                     """,
                     tuple(params + [size, offset]),
@@ -374,4 +374,3 @@ def keyword_values(values: dict[str, Any]) -> list[Any]:
         int(values.get("priority") or 100),
         values.get("active_yn") or "Y",
     ]
-

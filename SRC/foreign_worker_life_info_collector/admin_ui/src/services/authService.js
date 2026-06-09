@@ -2,6 +2,7 @@ import { getAdminApiBaseUrl } from './adminApiConfig'
 
 const API_BASE_URL = getAdminApiBaseUrl()
 const DEVICE_ID_KEY = 'workconnect.admin.deviceId'
+const DEFAULT_TIMEOUT_MS = 8000
 
 function createDeviceId() {
   if (globalThis.crypto?.randomUUID) {
@@ -27,16 +28,31 @@ export function resetDeviceId() {
 }
 
 async function requestJson(path, options = {}) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    credentials: 'include',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'X-Device-Id': getDeviceId(),
-      ...(options.headers || {}),
-    },
-    ...options,
-  })
+  const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
+  const { timeoutMs: _timeoutMs, ...fetchOptions } = options
+  let response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      credentials: 'include',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Device-Id': getDeviceId(),
+        ...(options.headers || {}),
+      },
+      ...fetchOptions,
+      signal: controller.signal,
+    })
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`API timeout after ${Math.round(timeoutMs / 1000)}s: ${path}`)
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timeout)
+  }
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) {
     throw new Error(payload.message || '서버 연결에 실패했습니다.')

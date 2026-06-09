@@ -127,7 +127,7 @@ class RSSNewsCollector:
                     content=content,
                     image_url=image_url,
                     image_urls=image_urls,
-                    category="foreign_worker_news",
+                    category="foreign_jobs",
                 )
             )
             if len(items) >= limit:

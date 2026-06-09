@@ -37,6 +37,15 @@ class NewsCandidate:
     image_urls: list[str] | None = None
     language: str = "ko"
     category: str = ""
+    content_category: str = ""
+    content_priority_group: str = ""
+    settlement_relevance_score: float = 0.0
+    practical_value_score: float = 0.0
+    category_rotation_score: float = 0.0
+    content_potential_score: float = 0.0
+    category_selection_reason: str = ""
+    is_sensitive: bool = False
+    review_required_reason: str = ""
     keyword: str = ""
     hash_key: str = ""
     similarity_key: str = ""
@@ -99,6 +108,7 @@ class NewsCandidate:
             image_urls=item.image_urls or [],
             language=item.language,
             category=item.category,
+            content_category=item.category,
         )
 
     def to_dict(self) -> dict:
@@ -117,6 +127,15 @@ class NewsCandidate:
             "image_urls": self.image_urls or [],
             "language": self.language,
             "category": self.category,
+            "content_category": self.content_category,
+            "content_priority_group": self.content_priority_group,
+            "settlement_relevance_score": self.settlement_relevance_score,
+            "practical_value_score": self.practical_value_score,
+            "category_rotation_score": self.category_rotation_score,
+            "content_potential_score": self.content_potential_score,
+            "category_selection_reason": self.category_selection_reason,
+            "is_sensitive": self.is_sensitive,
+            "review_required_reason": self.review_required_reason,
             "keyword": self.keyword,
             "hash_key": self.hash_key,
             "similarity_key": self.similarity_key,
@@ -196,6 +215,11 @@ class CandidateEvaluation:
     content_clarity_score: float
     facebook_post_suitability_score: float
     decision: str
+    settlement_relevance_score: float = 0.0
+    practical_value_score: float = 0.0
+    content_potential_score: float = 0.0
+    is_sensitive: bool = False
+    review_required_reason: str = ""
     reason: str = ""
     threshold: float = 0.0
     score_breakdown_json: str = ""

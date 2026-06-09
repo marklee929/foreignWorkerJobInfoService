@@ -183,6 +183,91 @@ ALTER TABLE social_news.candidate ADD COLUMN IF NOT EXISTS is_representative BOO
 ALTER TABLE social_news.candidate ADD COLUMN IF NOT EXISTS representative_candidate_id BIGINT;
 ALTER TABLE social_news.candidate ADD COLUMN IF NOT EXISTS content_fetch_status VARCHAR(40);
 ALTER TABLE social_news.candidate ADD COLUMN IF NOT EXISTS content_fetch_error TEXT;
+ALTER TABLE social_news.candidate ADD COLUMN IF NOT EXISTS content_category VARCHAR(80);
+ALTER TABLE social_news.candidate ADD COLUMN IF NOT EXISTS content_priority_group VARCHAR(20);
+ALTER TABLE social_news.candidate ADD COLUMN IF NOT EXISTS settlement_relevance_score NUMERIC(10,4) NOT NULL DEFAULT 0;
+ALTER TABLE social_news.candidate ADD COLUMN IF NOT EXISTS practical_value_score NUMERIC(10,4) NOT NULL DEFAULT 0;
+ALTER TABLE social_news.candidate ADD COLUMN IF NOT EXISTS category_rotation_score NUMERIC(10,4) NOT NULL DEFAULT 0;
+ALTER TABLE social_news.candidate ADD COLUMN IF NOT EXISTS content_potential_score NUMERIC(10,4) NOT NULL DEFAULT 0;
+ALTER TABLE social_news.candidate ADD COLUMN IF NOT EXISTS category_selection_reason TEXT;
+ALTER TABLE social_news.candidate ADD COLUMN IF NOT EXISTS is_sensitive BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE social_news.candidate ADD COLUMN IF NOT EXISTS review_required_reason TEXT;
+
+UPDATE social_news.candidate
+SET content_category = COALESCE(NULLIF(content_category, ''), NULLIF(category, ''), 'foreign_worker_policy'),
+    content_priority_group = COALESCE(NULLIF(content_priority_group, ''), 'PRIMARY')
+WHERE content_category IS NULL
+   OR content_category = ''
+   OR content_priority_group IS NULL
+   OR content_priority_group = '';
+
+UPDATE social_news.candidate
+SET category = 'foreign_jobs'
+WHERE category IN ('foreign_worker_news', 'jobs', 'foreign_worker_policy');
+
+UPDATE social_news.candidate
+SET content_category = 'foreign_jobs',
+    content_priority_group = 'PRIMARY'
+WHERE content_category IN ('foreign_worker_news', 'jobs', 'foreign_worker_policy');
+
+UPDATE social_news.raw_item
+SET category = 'foreign_jobs'
+WHERE category IN ('foreign_worker_news', 'jobs', 'foreign_worker_policy');
+
+UPDATE social_news.normalized_item
+SET category = 'foreign_jobs'
+WHERE category IN ('foreign_worker_news', 'jobs', 'foreign_worker_policy');
+
+WITH ranked_title_duplicates AS (
+    SELECT
+        id,
+        FIRST_VALUE(id) OVER (
+            PARTITION BY regexp_replace(lower(title), '[^0-9a-z가-힣]+', '', 'g')
+            ORDER BY
+                CASE
+                    WHEN COALESCE(facebook_post_url, '') <> '' OR published_at IS NOT NULL THEN 0
+                    WHEN publish_status = 'READY_TO_PUBLISH' THEN 1
+                    ELSE 2
+                END,
+                evaluation_score DESC,
+                id ASC
+        ) AS representative_id,
+        COUNT(*) OVER (PARTITION BY regexp_replace(lower(title), '[^0-9a-z가-힣]+', '', 'g')) AS duplicate_size
+    FROM social_news.candidate
+    WHERE length(regexp_replace(lower(title), '[^0-9a-z가-힣]+', '', 'g')) >= 18
+)
+UPDATE social_news.candidate candidate
+SET duplicate_group_id = ranked.representative_id,
+    representative_candidate_id = ranked.representative_id,
+    is_representative = CASE WHEN candidate.id = ranked.representative_id THEN TRUE ELSE FALSE END,
+    duplicate_count = GREATEST(candidate.duplicate_count, ranked.duplicate_size - 1),
+    status = CASE
+        WHEN candidate.id <> ranked.representative_id
+         AND COALESCE(candidate.facebook_post_url, '') = ''
+         AND candidate.published_at IS NULL
+         AND candidate.status NOT IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED', 'ARCHIVED')
+        THEN 'DUPLICATE'
+        ELSE candidate.status
+    END,
+    publish_status = CASE
+        WHEN candidate.id <> ranked.representative_id
+         AND COALESCE(candidate.facebook_post_url, '') = ''
+         AND candidate.published_at IS NULL
+         AND candidate.publish_status NOT IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED', 'ARCHIVED')
+        THEN 'DUPLICATE'
+        ELSE candidate.publish_status
+    END,
+    skip_reason = CASE
+        WHEN candidate.id <> ranked.representative_id
+         AND COALESCE(candidate.facebook_post_url, '') = ''
+         AND candidate.published_at IS NULL
+        THEN 'Duplicate title/content candidate; source was ignored for duplicate grouping.'
+        ELSE candidate.skip_reason
+    END,
+    updated_at = CURRENT_TIMESTAMP
+FROM ranked_title_duplicates ranked
+WHERE candidate.id = ranked.id
+  AND ranked.duplicate_size > 1;
 
 ALTER TABLE social_news.candidate ALTER COLUMN evaluation_score TYPE NUMERIC(10,4);
 ALTER TABLE social_news.candidate ALTER COLUMN duplicate_risk_score TYPE NUMERIC(10,4);
@@ -202,6 +287,8 @@ CREATE INDEX IF NOT EXISTS idx_news_raw_item_normalized ON social_news.raw_item(
 CREATE INDEX IF NOT EXISTS idx_news_candidate_normalized ON social_news.candidate(normalized_item_id);
 CREATE INDEX IF NOT EXISTS idx_news_candidate_representative ON social_news.candidate(is_representative, collected_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_news_candidate_representative_id ON social_news.candidate(representative_candidate_id);
+CREATE INDEX IF NOT EXISTS idx_news_candidate_content_group ON social_news.candidate(content_priority_group, content_category, collected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_news_candidate_sensitive ON social_news.candidate(is_sensitive, publish_status, collected_at DESC);
 
 UPDATE social_news.raw_item
 SET source_hash = COALESCE(raw_payload ->> 'hash_key', source_hash, hash_key)
@@ -259,6 +346,57 @@ UPDATE social_news.candidate
 SET representative_candidate_id = id
 WHERE representative_candidate_id IS NULL
   AND COALESCE(is_representative, TRUE) = TRUE;
+
+WITH ranked_title_duplicates AS (
+    SELECT
+        id,
+        FIRST_VALUE(id) OVER (
+            PARTITION BY regexp_replace(lower(title), '[^0-9a-z가-힣]+', '', 'g')
+            ORDER BY
+                CASE
+                    WHEN COALESCE(facebook_post_url, '') <> '' OR published_at IS NOT NULL THEN 0
+                    WHEN publish_status = 'READY_TO_PUBLISH' THEN 1
+                    ELSE 2
+                END,
+                evaluation_score DESC,
+                id ASC
+        ) AS representative_id,
+        COUNT(*) OVER (PARTITION BY regexp_replace(lower(title), '[^0-9a-z가-힣]+', '', 'g')) AS duplicate_size
+    FROM social_news.candidate
+    WHERE length(regexp_replace(lower(title), '[^0-9a-z가-힣]+', '', 'g')) >= 18
+)
+UPDATE social_news.candidate candidate
+SET duplicate_group_id = ranked.representative_id,
+    representative_candidate_id = ranked.representative_id,
+    is_representative = CASE WHEN candidate.id = ranked.representative_id THEN TRUE ELSE FALSE END,
+    duplicate_count = GREATEST(candidate.duplicate_count, ranked.duplicate_size - 1),
+    status = CASE
+        WHEN candidate.id <> ranked.representative_id
+         AND COALESCE(candidate.facebook_post_url, '') = ''
+         AND candidate.published_at IS NULL
+         AND candidate.status NOT IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED', 'ARCHIVED')
+        THEN 'DUPLICATE'
+        ELSE candidate.status
+    END,
+    publish_status = CASE
+        WHEN candidate.id <> ranked.representative_id
+         AND COALESCE(candidate.facebook_post_url, '') = ''
+         AND candidate.published_at IS NULL
+         AND candidate.publish_status NOT IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED', 'ARCHIVED')
+        THEN 'DUPLICATE'
+        ELSE candidate.publish_status
+    END,
+    skip_reason = CASE
+        WHEN candidate.id <> ranked.representative_id
+         AND COALESCE(candidate.facebook_post_url, '') = ''
+         AND candidate.published_at IS NULL
+        THEN 'Duplicate title/content candidate; source was ignored for duplicate grouping.'
+        ELSE candidate.skip_reason
+    END,
+    updated_at = CURRENT_TIMESTAMP
+FROM ranked_title_duplicates ranked
+WHERE candidate.id = ranked.id
+  AND ranked.duplicate_size > 1;
 
 CREATE INDEX IF NOT EXISTS idx_news_candidate_publish_cycle
 ON social_news.candidate(publish_cycle_id, publish_status, post_expired, published_at);

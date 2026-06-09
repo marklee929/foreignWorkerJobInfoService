@@ -14,7 +14,7 @@ from .repository import OccupationRepository
 
 
 JOB_DEFAULT_API_URL = "https://www.work24.go.kr/cm/openApi/call/wk/callOpenApiSvcInfo210L01.do"
-OCCUPATION_DEFAULT_API_URL = "https://www.work24.go.kr/cm/openApi/call/wk/callOpenApiSvcInfo210L01.do"
+OCCUPATION_DEFAULT_API_URL = "https://www.work24.go.kr/cm/openApi/call/wk/callOpenApiSvcInfo212L01.do"
 
 JOB_CODE_KEYS = ("jobCd", "jobCode", "jobsCd", "job_code", "code")
 JOB_NAME_KEYS = ("jobNm", "jobName", "jobsNm", "job_name", "name")
@@ -80,6 +80,15 @@ def strip_namespace(tag: str) -> str:
     return tag.rsplit("}", 1)[-1] if "}" in tag else tag
 
 
+def response_error(raw: str) -> str:
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError:
+        return ""
+    error_node = root.find(".//error")
+    return (error_node.text or "").strip() if error_node is not None and error_node.text else ""
+
+
 class BaseEmployment24DictionaryCollector:
     collector_type = ""
     key_env = ""
@@ -124,6 +133,9 @@ class BaseEmployment24DictionaryCollector:
             raise RuntimeError(f"HTTP {exc.code}") from exc
         except URLError as exc:
             raise RuntimeError(f"{self.collector_type} API connection failed") from exc
+        error_message = response_error(raw)
+        if error_message:
+            raise RuntimeError(error_message[:300])
         return raw, parse_response(raw)
 
     def run(self, page_from: int = 1, page_to: int = 1, size: int = 100, delay_seconds: float = 0.5) -> dict[str, Any]:
@@ -211,6 +223,13 @@ class OccupationInfoCollector(BaseEmployment24DictionaryCollector):
     url_env = "EMPLOYEE_24_OPEN_API_OCCUPATION_URL"
     default_url = OCCUPATION_DEFAULT_API_URL
 
+    def request_params(self, page: int, size: int) -> dict[str, Any]:
+        return {
+            "authKey": self.auth_key(),
+            "returnType": os.environ.get("EMPLOYEE_24_OPEN_API_RETURN_TYPE", "XML"),
+            "target": os.environ.get("EMPLOYEE_24_OPEN_API_OCCUPATION_TARGET", "JOBCD"),
+        }
+
     def upsert(self, raw_item: dict[str, Any]) -> str:
         item = {
             "source": "employment24",
@@ -229,4 +248,3 @@ class OccupationInfoCollector(BaseEmployment24DictionaryCollector):
             "active_yn": "Y",
         }
         return self.repository.upsert_occupation(item)
-

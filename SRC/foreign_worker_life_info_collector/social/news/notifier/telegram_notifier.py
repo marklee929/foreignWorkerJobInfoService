@@ -80,7 +80,7 @@ class NewsTelegramNotifier:
                 "",
                 f"Ready: {selection.get('ready_count', 0)}",
                 f"Expanded: {selection.get('expanded_candidate_count', 0)}",
-                f"Today's Articles: {selection.get('today_article_count', 0)}",
+                f"Window Articles: {selection.get('today_article_count', 0)}",
             ]
         )
         return self._send(message, dry_run=dry_run)
@@ -90,8 +90,8 @@ class NewsTelegramNotifier:
             [
                 "⚠️ No Safe Candidate",
                 "",
-                f"Today's Articles: {selection.get('today_article_count', 0)}",
-                f"Average Score: {selection.get('today_avg_score', 0)}",
+                f"Window Articles: {selection.get('today_article_count', 0)}",
+                f"Window Average Score: {selection.get('today_avg_score', 0)}",
                 f"Threshold: {selection.get('threshold_used') or 40}",
             ]
         )

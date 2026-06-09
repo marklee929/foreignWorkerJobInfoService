@@ -29,9 +29,12 @@ class LlamaDuplicateChecker:
                 "stream": False,
                 "think": False,
                 "format": "json",
-                "options": {"temperature": 0, "num_predict": 160, "num_ctx": 1024},
+                "options": {
+                    "temperature": 0,
+                    "num_predict": int(os.getenv("OLLAMA_DUPLICATE_NUM_PREDICT", "120")),
+                    "num_ctx": int(os.getenv("OLLAMA_DUPLICATE_NUM_CTX", "768")),
+                },
                 "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "30s"),
-                "options": {"temperature": 0},
             }
         ).encode("utf-8")
         request = Request(endpoint, data=body, headers={"Content-Type": "application/json"})

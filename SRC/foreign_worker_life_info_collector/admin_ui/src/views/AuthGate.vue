@@ -113,7 +113,7 @@ async function startAuthCheck() {
   status.value = 'CHECKING'
   message.value = '관리자 접속 확인 중입니다.'
   try {
-    const result = await checkAdminAuth({ forceApprovalRequest: true })
+    const result = await checkAdminAuth()
     sessionId.value = result.sessionId
     status.value = result.status || 'PENDING'
     message.value = result.message || statusView.value.body
@@ -148,8 +148,7 @@ function initializeAuthGate() {
     pollingTimer.value = window.setInterval(pollStatus, 2500)
     return
   }
-  status.value = 'READY'
-  message.value = '관리자 접속 승인을 요청해주세요.'
+  startAuthCheck()
 }
 
 onMounted(initializeAuthGate)

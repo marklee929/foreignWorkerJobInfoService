@@ -10,11 +10,13 @@ import {
   fetchBotStatus,
   fetchCandidates,
   fetchDashboardSummary,
+  fetchFacebookStatus,
   fetchJobCollectorLogs,
   fetchJobCollectorStatus,
   fetchLlamaStatus,
   fetchLogs,
   fetchModules,
+  fetchOccupationDashboard,
   reconnectLlama,
   resetBotError,
   startBot,
@@ -33,7 +35,9 @@ const candidates = ref([])
 const logs = ref([])
 const jobLogs = ref([])
 const botStatus = ref({ status: 'STOPPED', label: '중지됨', lastErrorMessage: '' })
+const facebookStatus = ref({ page_id: '', page_token_fingerprint: '', page_token_masked: '', page_token_env_key: 'FACEBOOK_PAGE_ACCESS_TOKEN' })
 const jobCollectorStatus = ref({ status: 'STOPPED', schedulerEnabled: false, latest: null, settings: {} })
+const occupationDashboard = ref({ job_count: 0, occupation_count: 0, latest_status: null })
 const llamaStatus = ref({ enabled: false, connected: false, endpoint: '-', model: '-', status: 'DISABLED', message: '로컬 LLaMA 비활성' })
 const loadError = ref('')
 const loading = ref(true)
@@ -45,7 +49,9 @@ const loadingMoreLogs = ref(false)
 const hasMoreLogs = ref(true)
 const visibleLogCount = ref(10)
 const LOG_PAGE_SIZE = 10
+const DASHBOARD_TTL_MS = 30000
 let refreshTimer = null
+let lastDashboardLoadAt = 0
 
 const statusCards = computed(() => [
   { label: '전체 뉴스', value: String(summary.value.candidate_count || 0), delta: '수집', tone: 'primary' },
@@ -92,7 +98,7 @@ const combinedLogRows = computed(() => {
   const jobRows = jobLogs.value.map((log) => {
     const failed = Number(log.failedCount || 0)
     const message = [
-      `직업정보 수집 ${log.status}`,
+      `채용정보 수집 ${log.status}`,
       `수신 ${log.totalReceived || 0}건`,
       `신규 ${log.insertedCount || 0}건`,
       `업데이트 ${log.updatedCount || 0}건`,
@@ -104,7 +110,7 @@ const combinedLogRows = computed(() => {
       .join(' / ')
     return {
       time: log.endedAt || log.startedAt || '-',
-      bot: '직업정보 봇',
+      bot: '채용정보 봇',
       level: failed ? 'ERROR' : 'INFO',
       message,
       id: `job-${log.id}`,
@@ -118,6 +124,7 @@ const combinedLogRows = computed(() => {
 const logRows = computed(() => combinedLogRows.value.slice(0, visibleLogCount.value))
 const llamaActive = computed(() => llamaStatus.value.status === 'CONNECTED' || llamaStatus.value.status === 'STARTING')
 const llamaToggleLabel = computed(() => (llamaActive.value ? 'LLaMA 끄기' : 'LLaMA 켜기'))
+const llamaServerTypeLabel = computed(() => (llamaStatus.value.managed === false ? '외부 서버' : '동일 서버'))
 
 const botCards = computed(() => [
   {
@@ -129,23 +136,29 @@ const botCards = computed(() => [
     error: botStatus.value.status === 'ERROR',
     busy: botBusy.value,
     toggle: handleToggleBot,
-    detail: botStatus.value.lastErrorMessage || '운영 상태 확인 중',
+    detail: botStatus.value.lastErrorMessage || `Facebook token fp=${facebookStatus.value.page_token_fingerprint || '-'} / page=${facebookStatus.value.page_id || '-'}`,
   },
   {
-    key: 'job-collector',
+    key: 'occupation-dictionary',
     name: '직업정보 봇',
     description: '고용24 직업/직무 사전',
-    status: jobCollectorStatus.value.status,
-    active: Boolean(jobCollectorStatus.value.schedulerEnabled) || jobCollectorStatus.value.status === 'RUNNING',
-    error: jobCollectorStatus.value.status === 'ERROR' || Boolean(jobCollectorStatus.value.lastErrorMessage),
-    busy: jobBusy.value,
-    toggle: handleToggleJobCollector,
-    detail: jobCollectorStatus.value.lastErrorMessage || `최근 수신 ${jobCollectorStatus.value.latest?.totalReceived ?? 0}건`,
+    status: occupationDashboard.value.latest_status || 'READY',
+    active: Number(occupationDashboard.value.occupation_count || 0) > 0 || Number(occupationDashboard.value.job_count || 0) > 0,
+    readonly: true,
+    detail: `직업정보 ${occupationDashboard.value.occupation_count || 0}건 / 직무정보 ${occupationDashboard.value.job_count || 0}건`,
   },
   { key: 'content-bot', name: '콘텐츠 생성 봇', description: '추가 예정', status: 'PLANNED', active: false, planned: true },
   { key: 'lifestyle-bot', name: '생활정보 봇', description: '추가 예정', status: 'PLANNED', active: false, planned: true },
   { key: 'immigration-bot', name: '출입국 봇', description: '추가 예정', status: 'PLANNED', active: false, planned: true },
-  { key: 'labor-bot', name: '노동정보 봇', description: '추가 예정', status: 'PLANNED', active: false, planned: true },
+  {
+    key: 'job-collector',
+    name: '채용정보 봇',
+    description: '고용24 채용공고 수집 - 점검중',
+    status: 'PLANNED',
+    active: false,
+    planned: true,
+    detail: jobCollectorStatus.value.lastErrorMessage || '기업회원 API 권한 확인 후 다시 활성화',
+  },
 ])
 
 function normalizeBotPayload(payload) {
@@ -171,7 +184,7 @@ function llamaStatusLabel(status) {
     STARTING: '시작 중',
     STOPPING: '종료 중',
     ERROR: '오류',
-    DISABLED: '비활성',
+    DISABLED: '꺼짐',
   }
   return map[status] || status || '확인 중'
 }
@@ -205,10 +218,12 @@ async function loadOperationalLogs({ reset = false } = {}) {
       visibleLogCount.value = LOG_PAGE_SIZE
       hasMoreLogs.value = true
     }
-    const [socialPage, jobPage] = await Promise.all([
+    const [socialResult, jobResult] = await Promise.allSettled([
       fetchLogs({ limit: LOG_PAGE_SIZE, offset: logs.value.length }),
       fetchJobCollectorLogs({ limit: LOG_PAGE_SIZE, offset: jobLogs.value.length }),
     ])
+    const socialPage = socialResult.status === 'fulfilled' ? socialResult.value : []
+    const jobPage = jobResult.status === 'fulfilled' ? jobResult.value : []
     mergeUniqueLogs(logs, socialPage)
     mergeUniqueLogs(jobLogs, jobPage)
     hasMoreLogs.value = socialPage.length === LOG_PAGE_SIZE || jobPage.length === LOG_PAGE_SIZE
@@ -218,10 +233,12 @@ async function loadOperationalLogs({ reset = false } = {}) {
 }
 
 async function refreshLatestLogs() {
-  const [socialPage, jobPage] = await Promise.all([
+  const [socialResult, jobResult] = await Promise.allSettled([
     fetchLogs({ limit: LOG_PAGE_SIZE, offset: 0 }),
     fetchJobCollectorLogs({ limit: LOG_PAGE_SIZE, offset: 0 }),
   ])
+  const socialPage = socialResult.status === 'fulfilled' ? socialResult.value : []
+  const jobPage = jobResult.status === 'fulfilled' ? jobResult.value : []
   mergeUniqueLogs(logs, socialPage, true)
   mergeUniqueLogs(jobLogs, jobPage, true)
 }
@@ -240,23 +257,62 @@ async function handleLoadMoreLogs() {
 }
 
 async function loadDashboard({ silent = false } = {}) {
+  const now = Date.now()
+  if (silent && dashboardLoaded.value && now - lastDashboardLoadAt < DASHBOARD_TTL_MS) {
+    return
+  }
+  if (silent && document.hidden) {
+    return
+  }
   if (!silent) {
     loading.value = true
   }
   loadError.value = ''
+  const requests = [
+    ['summary', fetchDashboardSummary],
+    ['modules', fetchModules],
+    ['candidates', fetchCandidates],
+    ['bot', fetchBotStatus],
+    ['llama', fetchLlamaStatus],
+    ['jobCollector', fetchJobCollectorStatus],
+    ['occupation', fetchOccupationDashboard],
+    ['facebook', fetchFacebookStatus],
+  ]
   try {
-    const [summaryPayload, modulePayload, candidatePayload, botPayload, llamaPayload, jobPayload] = await Promise.all([
-      fetchDashboardSummary(),
-      fetchModules(),
-      fetchCandidates(),
-      fetchBotStatus(),
-      fetchLlamaStatus(),
-      fetchJobCollectorStatus(),
-    ])
+    const settled = await Promise.allSettled(requests.map(([, request]) => request()))
+    const failed = settled
+      .map((result, index) => ({ result, key: requests[index][0] }))
+      .filter((item) => item.result.status === 'rejected')
+    if (failed.length) {
+      const firstError = failed[0].result.reason
+      const message = firstError instanceof Error ? firstError.message : String(firstError)
+      if (message.includes('관리자 승인') || message.includes('접속 승인') || message.includes('unauthorized')) {
+        window.location.replace('/auth')
+        return
+      }
+      loadError.value = `서버접속불가: ${failed.map((item) => item.key).join(', ')}`
+      console.warn('[dashboard] API request failed', failed.map((item) => ({ key: item.key, reason: item.result.reason?.message || String(item.result.reason) })))
+      runtimeConfig.value = { ...runtimeConfig.value, apiConnected: false }
+    } else {
+      runtimeConfig.value = { ...runtimeConfig.value, apiConnected: true }
+    }
+
+    const value = (key, fallback) => {
+      const index = requests.findIndex((item) => item[0] === key)
+      return settled[index]?.status === 'fulfilled' ? settled[index].value : fallback
+    }
+    const summaryPayload = value('summary', summary.value)
+    const modulePayload = value('modules', modules.value)
+    const candidatePayload = value('candidates', { items: candidates.value })
+    const botPayload = value('bot', botStatus.value)
+    const llamaPayload = value('llama', llamaStatus.value)
+    const jobPayload = value('jobCollector', jobCollectorStatus.value)
+    const occupationPayload = value('occupation', occupationDashboard.value)
+    const facebookPayload = value('facebook', facebookStatus.value)
+
     summary.value = { ...emptySummary, ...summaryPayload }
     runtimeConfig.value = {
       ...runtimeConfig.value,
-      apiConnected: true,
       database: summaryPayload.database || runtimeConfig.value.database,
     }
     modules.value = modulePayload
@@ -264,19 +320,17 @@ async function loadDashboard({ silent = false } = {}) {
     botStatus.value = normalizeBotPayload(botPayload)
     llamaStatus.value = llamaPayload
     jobCollectorStatus.value = jobPayload
+    occupationDashboard.value = occupationPayload
+    facebookStatus.value = facebookPayload
     if (!dashboardLoaded.value) {
       await loadOperationalLogs({ reset: true })
     } else {
       await refreshLatestLogs()
     }
     dashboardLoaded.value = true
+    lastDashboardLoadAt = Date.now()
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    if (message.includes('관리자 승인') || message.includes('접속 승인')) {
-      window.location.replace('/auth')
-      return
-    }
-    loadError.value = '운영 데이터를 불러오지 못했습니다. 서버 상태를 확인해주세요.'
+    loadError.value = `서버접속불가: ${error instanceof Error ? error.message : String(error)}`
     runtimeConfig.value = { ...runtimeConfig.value, apiConnected: false }
   } finally {
     loading.value = false
@@ -341,26 +395,30 @@ async function handleLogout() {
 
 onMounted(() => {
   loadDashboard()
-  refreshTimer = window.setInterval(() => loadDashboard({ silent: true }), 5000)
+  refreshTimer = window.setInterval(() => loadDashboard({ silent: true }), DASHBOARD_TTL_MS)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
 })
 
 onBeforeUnmount(() => {
   if (refreshTimer) {
     window.clearInterval(refreshTimer)
   }
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
+
+function handleVisibilityChange() {
+  if (!document.hidden) {
+    loadDashboard({ silent: true })
+  }
+}
 </script>
 
 <template>
   <div class="min-h-screen bg-surface text-on-surface">
     <Sidebar :nav-items="navItems" @logout="handleLogout" />
-    <Header @logout="handleLogout" />
+    <Header :server-status="loadError ? 'error' : 'ok'" :server-message="loadError" @logout="handleLogout" />
 
     <main class="ml-[240px] space-y-lg p-lg">
-      <section v-if="loadError && dashboardLoaded" class="control-card border-error bg-error-container/30 p-md text-body-sm text-error">
-        {{ loadError }}
-      </section>
-
       <section class="grid grid-cols-6 gap-gutter">
         <StatusCard v-for="card in statusCards" :key="card.label" :card="card" />
       </section>
@@ -414,7 +472,7 @@ onBeforeUnmount(() => {
               <div class="mt-md flex items-center justify-between">
                 <p class="min-w-0 truncate text-body-sm" :class="bot.error ? 'text-error' : 'text-on-surface-variant'">{{ bot.detail }}</p>
                 <button
-                  v-if="!bot.planned"
+                  v-if="!bot.planned && bot.toggle"
                   class="relative h-8 w-16 shrink-0 rounded-full transition disabled:cursor-not-allowed disabled:opacity-60"
                   :class="bot.active ? 'bg-success' : 'bg-outline'"
                   type="button"
@@ -471,6 +529,10 @@ onBeforeUnmount(() => {
             <div class="rounded border border-outline-variant px-sm py-xs">
               <dt class="text-on-surface-variant">엔드포인트</dt>
               <dd class="mt-xs truncate font-mono">{{ llamaStatus.endpoint }}</dd>
+            </div>
+            <div class="flex items-center justify-between gap-md rounded border border-outline-variant px-sm py-xs">
+              <dt class="text-on-surface-variant">서버 유형</dt>
+              <dd class="font-bold">{{ llamaServerTypeLabel }}</dd>
             </div>
           </dl>
 

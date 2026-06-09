@@ -2,20 +2,34 @@ import { getDeviceId } from './authService'
 import { getAdminApiBaseUrl } from './adminApiConfig'
 
 const API_BASE_URL = getAdminApiBaseUrl()
+const DEFAULT_TIMEOUT_MS = 8000
 
 async function requestJson(path, options = {}) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    credentials: 'include',
-    ...options,
-    headers: {
-      Accept: 'application/json',
-      'X-Device-Id': getDeviceId(),
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(options.headers || {}),
-    },
-  }).catch(() => {
+  const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
+  const { timeoutMs: _timeoutMs, ...fetchOptions } = options
+  let response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      credentials: 'include',
+      ...fetchOptions,
+      signal: controller.signal,
+      headers: {
+        Accept: 'application/json',
+        'X-Device-Id': getDeviceId(),
+        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(options.headers || {}),
+      },
+    })
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`API timeout after ${Math.round(timeoutMs / 1000)}s: ${path}`)
+    }
     throw new Error('서버 연결에 실패했습니다.')
-  })
+  } finally {
+    window.clearTimeout(timeout)
+  }
 
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) {
@@ -26,6 +40,10 @@ async function requestJson(path, options = {}) {
 
 function getJson(path) {
   return requestJson(path)
+}
+
+function getJsonWithTimeout(path, timeoutMs) {
+  return requestJson(path, { timeoutMs })
 }
 
 function withQuery(path, params = {}) {
@@ -59,6 +77,26 @@ export async function fetchCandidates(params = {}) {
   return getJson(withQuery('/api/social/news/candidates', params))
 }
 
+export function fetchContentDashboard() {
+  return getJson('/api/admin/content/dashboard')
+}
+
+export function fetchContentCandidates(params = {}) {
+  return getJson(withQuery('/api/admin/content/candidates', params))
+}
+
+export function fetchContentCandidateDetail(id) {
+  return getJson(`/api/admin/content/candidates/${id}`)
+}
+
+export function syncContentCandidates(payload = {}) {
+  return postJson('/api/admin/content/sync', payload)
+}
+
+export function publishContentCandidate(id, payload = {}) {
+  return postJson(`/api/admin/content/candidates/${id}/publish`, payload)
+}
+
 export function fetchCandidateDetail(id) {
   return getJson(`/api/social/news/candidates/${id}`)
 }
@@ -76,12 +114,16 @@ export async function cleanupCandidateLinks(payload = {}) {
 }
 
 export async function fetchLogs(params = {}) {
-  const payload = await getJson(withQuery('/api/logs/recent', params))
+  const payload = await getJsonWithTimeout(withQuery('/api/logs/recent', params), 5000)
   return payload.items || []
 }
 
 export function fetchBotStatus() {
   return getJson('/api/admin/bot/status')
+}
+
+export function fetchFacebookStatus() {
+  return getJson('/api/admin/facebook/status')
 }
 
 export function startBot() {
@@ -173,8 +215,36 @@ export async function fetchOccupationCollectLogs(params = {}) {
   return payload.items || []
 }
 
+export function fetchImmigrationDashboard() {
+  return getJson('/api/admin/immigration/dashboard')
+}
+
+export function fetchImmigrationNotices(params = {}) {
+  return getJson(withQuery('/api/admin/immigration/notices', params))
+}
+
+export function fetchImmigrationNoticeDetail(id) {
+  return getJson(`/api/admin/immigration/notices/${id}`)
+}
+
+export function collectImmigrationNotices(payload = {}) {
+  return postJson('/api/admin/immigration/collect', payload)
+}
+
+export function summarizeImmigrationNotice(id) {
+  return postJson(`/api/admin/immigration/notices/${id}/summarize`)
+}
+
+export function approveImmigrationNotice(id) {
+  return postJson(`/api/admin/immigration/notices/${id}/approve`)
+}
+
+export function publishImmigrationNotice(id) {
+  return postJson(`/api/admin/immigration/notices/${id}/publish`)
+}
+
 export async function fetchJobCollectorLogs(params = {}) {
-  const payload = await getJson(withQuery('/api/admin/job-collector/logs', params))
+  const payload = await getJsonWithTimeout(withQuery('/api/admin/job-collector/logs', params), 5000)
   return payload.items || []
 }
 
