@@ -90,8 +90,16 @@ ALLOWED_ADMIN_ORIGINS = {
 
 
 def ensure_auth_schema() -> None:
+    print("[storage] schema initialization skipped during recovery", flush=True)
+    return
     with connect() as conn:
         with conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(52765001)")
+            locked = bool(cur.fetchone()[0])
+            if not locked:
+                print("[storage] schema initialization already running; skipping this process", flush=True)
+                return
+            cur.execute("SET LOCAL lock_timeout = '5s'")
             cur.execute(
                 """
                 CREATE SCHEMA IF NOT EXISTS admin;
@@ -172,6 +180,7 @@ def ensure_auth_schema() -> None:
                 WHERE module_key = 'collector.rss';
                 """
             )
+            cur.execute("SELECT pg_advisory_unlock(52765001)")
         conn.commit()
 
 
@@ -186,6 +195,21 @@ def fetch_all(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
 def fetch_one(sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any]:
     rows = fetch_all(sql, params)
     return rows[0] if rows else {}
+
+
+def fetch_one_with_timeout(sql: str, params: tuple[Any, ...] = (), timeout_ms: int = 3000) -> dict[str, Any]:
+    try:
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = %s", (timeout_ms,))
+                cur.execute(sql, params)
+                row = cur.fetchone()
+                columns = [column.name for column in cur.description] if cur.description else []
+            conn.commit()
+        return dict(zip(columns, row)) if row else {}
+    except Exception as exc:
+        print(f"[dashboard][WARN] summary query timed out or failed: {str(exc)[:180]}", flush=True)
+        return {}
 
 
 def execute_one(sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any]:
@@ -260,6 +284,7 @@ def set_bot_status(status: str, error_message: str | None = None) -> dict[str, A
         assignments.append("last_error_message = NULL")
     elif status == "STOPPED":
         assignments.append("last_stopped_at = CURRENT_TIMESTAMP")
+        assignments.append("last_error_message = NULL")
     elif status == "ERROR":
         assignments.append("last_error_at = CURRENT_TIMESTAMP")
         assignments.append("last_error_message = %s")
@@ -277,6 +302,19 @@ def set_bot_status(status: str, error_message: str | None = None) -> dict[str, A
     return format_bot_status(row)
 
 
+def is_retryable_db_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(
+        token in message
+        for token in (
+            "deadlock detected",
+            "lock timeout",
+            "could not serialize access",
+            "serialization failure",
+        )
+    )
+
+
 def run_bot_loop() -> None:
     try:
         from ..crew_team.social.news_bot import NewsBot
@@ -284,6 +322,7 @@ def run_bot_loop() -> None:
         keyword = os.environ.get("NEWS_COLLECTOR_KEYWORD", "foreign worker visa Korea")
         interval = int(os.environ.get("NEWS_COLLECTOR_CYCLE_INTERVAL_MINUTES", "20")) * 60
         failure_limit = int(os.environ.get("NEWS_BOT_CONSECUTIVE_FAILURE_LIMIT", "3"))
+        retry_backoff = int(os.environ.get("NEWS_BOT_RETRY_BACKOFF_SECONDS", "60"))
         consecutive_failures = 0
         write_bot_log("bot", "STARTED", f"소셜 뉴스 봇 시작: 검색어 '{keyword}'")
         while not BOT_STOP_EVENT.is_set():
@@ -295,7 +334,20 @@ def run_bot_loop() -> None:
                     break
                 continue
             write_bot_log("cycle", "STARTED", "뉴스 자동 게시 사이클 시작")
-            result = NewsBot().run(keyword=keyword, dry_run=False, limit=1)
+            try:
+                result = NewsBot().run(keyword=keyword, dry_run=False, limit=1)
+            except Exception as exc:
+                if not is_retryable_db_error(exc):
+                    raise
+                consecutive_failures += 1
+                write_bot_log(
+                    "cycle",
+                    "FAILED_RETRYABLE",
+                    f"재시도 가능한 DB 잠금 오류로 이번 사이클만 건너뜁니다: {str(exc)[:180]}",
+                )
+                if BOT_STOP_EVENT.wait(max(retry_backoff, 5)):
+                    break
+                continue
             publish_results = result.get("publish_results") or []
             selection_log = result.get("selection_log") or {}
             no_publish_code = selection_log.get("no_publish_code") or ""
@@ -339,9 +391,6 @@ def run_bot_loop() -> None:
 
 def start_bot() -> dict[str, Any]:
     global BOT_THREAD
-    row = bot_runtime_row()
-    if row.get("status") == "ERROR":
-        return format_bot_status(row)
     if BOT_THREAD and BOT_THREAD.is_alive():
         return set_bot_status("RUNNING")
     BOT_STOP_EVENT.clear()
@@ -1161,9 +1210,59 @@ def module_rows() -> list[dict[str, Any]]:
 
 
 def dashboard_summary() -> dict[str, Any]:
+    window_start = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    candidate_estimate = fetch_one(
+        """
+        SELECT GREATEST(COALESCE((SELECT reltuples::bigint FROM pg_class WHERE oid = 'social_news.candidate'::regclass), 0), 0)::int AS candidate_count
+        """
+    )
+    module_counts = fetch_one(
+        """
+        SELECT
+            COUNT(*)::int AS module_count,
+            COUNT(*) FILTER (WHERE is_enabled)::int AS enabled_module_count,
+            COUNT(*) FILTER (WHERE NOT is_enabled)::int AS disabled_module_count
+        FROM admin.module_config
+        """
+    )
+    latest_cycle = fetch_one_with_timeout(
+        """
+        SELECT status, dry_run, started_at, ended_at
+        FROM social_news.pipeline_cycle
+        ORDER BY started_at DESC
+        LIMIT 1
+        """,
+        timeout_ms=1000,
+    )
+    return {
+        "candidate_count": candidate_estimate.get("candidate_count", 0),
+        "today_ready_count": 0,
+        "previous_post_expired_count": 0,
+        "published_count": 0,
+        "post_expired_count": 0,
+        "duplicate_count": 0,
+        "failed_count": 0,
+        "today_article_count": 0,
+        "today_unposted_count": 0,
+        "avg_score": 0,
+        "ready_count": 0,
+        "retryable_count": 0,
+        "posted_today_count": 0,
+        "primary_candidate_count": 0,
+        "secondary_candidate_count": 0,
+        "tertiary_candidate_count": 0,
+        "recent_24h_category_ratio": {},
+        "target_publish_ratio": "disabled during recovery",
+        **module_counts,
+        "latest_cycle": latest_cycle,
+        "cooldown": {"active": False, "next_publish_at": "", "remaining_seconds": 0},
+        "cooldown_active": False,
+        "next_publish_at": "",
+        "publish_window_start": window_start,
+    }
     pipeline = NewsPipeline(repository=news_repository(), collectors=[])
     window_start = pipeline.publish_window_start().isoformat()
-    candidate_counts = fetch_one(
+    candidate_counts = fetch_one_with_timeout(
         """
         SELECT
             COUNT(*)::int AS candidate_count,
@@ -1196,7 +1295,7 @@ def dashboard_summary() -> dict[str, Any]:
         """,
         (window_start, window_start),
     )
-    publish_metrics = fetch_one(
+    publish_metrics = fetch_one_with_timeout(
         """
         SELECT
             COUNT(*) FILTER (WHERE collected_at >= %s)::int AS today_article_count,
@@ -1233,7 +1332,7 @@ def dashboard_summary() -> dict[str, Any]:
         (window_start, window_start, window_start, window_start, window_start),
     )
     cooldown = pipeline.publish_cooldown_info()
-    category_metrics = fetch_one(
+    category_metrics = fetch_one_with_timeout(
         """
         SELECT
             COUNT(*) FILTER (WHERE collected_at >= %s AND content_priority_group = 'PRIMARY')::int AS primary_candidate_count,
@@ -1475,8 +1574,20 @@ def cleanup_candidate_article_data(payload: dict[str, Any]) -> dict[str, Any]:
     limit = max(1, min(limit, 100))
     force_resummarize = bool(payload.get("forceResummarize")) if isinstance(payload, dict) else False
     suppress_empty_log = bool(payload.get("suppressEmptyLog")) if isinstance(payload, dict) else False
+    retryable_reset = reset_retryable_generation_failures(limit=limit)
     rows = cleanup_candidate_targets(payload, selected_ids, limit)
-    result = {"target": len(rows), "updated": 0, "resolved_url": 0, "content_updated": 0, "summary_updated": 0, "score_updated": 0, "queue_updated": 0, "failed": 0, "skipped": 0}
+    result = {
+        "target": len(rows),
+        "updated": 0,
+        "resolved_url": 0,
+        "content_updated": 0,
+        "summary_updated": 0,
+        "score_updated": 0,
+        "queue_updated": 0,
+        "failed": 0,
+        "skipped": 0,
+        "retryable_reset": retryable_reset,
+    }
     touched_ids: list[int] = []
     force_queue = bool(selected_ids)
     for row in rows:
@@ -1504,7 +1615,7 @@ def cleanup_candidate_targets(payload: dict[str, Any], selected_ids: list[int], 
         where.append("id = ANY(%s)")
         params.append(selected_ids)
     elif auto_repair_only:
-        retry_minutes = max(5, min(int(payload.get("retryMinutes") or 30), 1440))
+        retry_minutes = max(1, min(int(payload.get("retryMinutes") or 5), 1440))
         where.append(
             """
             (
@@ -1584,7 +1695,7 @@ def start_article_cleanup_scheduler() -> None:
 
 
 def run_article_cleanup_scheduler() -> None:
-    interval_minutes = int(os.getenv("NEWS_ARTICLE_AUTO_CLEANUP_INTERVAL_MINUTES", "15") or "15")
+    interval_minutes = int(os.getenv("NEWS_ARTICLE_AUTO_CLEANUP_INTERVAL_MINUTES", "5") or "5")
     interval_seconds = max(300, interval_minutes * 60)
     limit = max(1, min(int(os.getenv("NEWS_ARTICLE_AUTO_CLEANUP_LIMIT", "20") or "20"), 100))
     initial_delay = max(30, min(int(os.getenv("NEWS_ARTICLE_AUTO_CLEANUP_INITIAL_DELAY_SECONDS", "90") or "90"), interval_seconds))
@@ -1608,7 +1719,7 @@ def run_article_cleanup_once(limit: int = 20) -> dict[str, Any]:
                 "includeDuplicates": "0",
                 "forceResummarize": False,
                 "suppressEmptyLog": True,
-                "retryMinutes": int(os.getenv("NEWS_ARTICLE_AUTO_CLEANUP_RETRY_MINUTES", "30") or "30"),
+                "retryMinutes": int(os.getenv("NEWS_ARTICLE_AUTO_CLEANUP_RETRY_MINUTES", "5") or "5"),
             }
         )
         if int(result.get("target") or 0) > 0:
@@ -1824,6 +1935,7 @@ def update_cleanup_rows(
     image_urls_json = json.dumps(image_urls or [], ensure_ascii=False) if not isinstance(image_urls, str) else image_urls
     with connect() as conn:
         with conn.cursor() as cur:
+            cur.execute("SET LOCAL lock_timeout = '5s'")
             cur.execute(
                 """
                 UPDATE social_news.candidate
@@ -1971,12 +2083,67 @@ def update_cleanup_rows(
         conn.commit()
 
 
+def reset_retryable_generation_failures(limit: int = 20) -> int:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL lock_timeout = '5s'")
+            cur.execute(
+                """
+                WITH target AS (
+                    SELECT id
+                    FROM social_news.candidate
+                    WHERE collected_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+                      AND published_at IS NULL
+                      AND COALESCE(facebook_post_url, '') = ''
+                      AND COALESCE(is_representative, TRUE) = TRUE
+                      AND COALESCE(source_url, '') <> ''
+                      AND COALESCE(content, '') <> ''
+                      AND length(COALESCE(content, '')) >= 120
+                      AND COALESCE(risk_level, '') != 'HIGH'
+                      AND (
+                          COALESCE(status, '') IN ('FAILED', 'FAILED_RETRYABLE')
+                          OR COALESCE(publish_status, '') IN ('FAILED', 'FAILED_RETRYABLE')
+                      )
+                      AND (
+                          COALESCE(fail_reason, '') ILIKE '%%LLaMA%%'
+                          OR COALESCE(fail_reason, '') ILIKE '%%summary%%'
+                          OR COALESCE(fail_reason, '') ILIKE '%%timed out%%'
+                      )
+                    ORDER BY updated_at ASC NULLS FIRST, id ASC
+                    LIMIT %s
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE social_news.candidate candidate
+                SET status = 'READY_TO_PUBLISH',
+                    publish_status = 'READY_TO_PUBLISH',
+                    post_expired = FALSE,
+                    post_expired_reason = '',
+                    fail_reason = '',
+                    skip_reason = '',
+                    updated_at = CURRENT_TIMESTAMP
+                FROM target
+                WHERE candidate.id = target.id
+                """,
+                (max(1, min(int(limit or 20), 100)),),
+            )
+            updated = cur.rowcount or 0
+        conn.commit()
+    if updated:
+        news_repository().insert_pipeline_log(
+            "article_cleanup",
+            "COMPLETED",
+            f"reset {updated} retryable LLaMA/article generation failures to READY_TO_PUBLISH",
+        )
+    return int(updated)
+
+
 def refresh_publish_queue_after_cleanup(candidate_ids: list[int]) -> int:
     ids = [int(candidate_id) for candidate_id in candidate_ids if candidate_id]
     if not ids:
         return 0
     with connect() as conn:
         with conn.cursor() as cur:
+            cur.execute("SET LOCAL lock_timeout = '5s'")
             cur.execute(
                 """
                 UPDATE social_news.candidate

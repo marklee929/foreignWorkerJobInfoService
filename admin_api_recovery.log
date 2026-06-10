@@ -1,0 +1,12 @@
+[admin-dev] Starting API server: C:\Users\이인결\AppData\Local\Programs\Python\Python312\python.exe -m foreign_worker_life_info_collector.api.admin_server --host 127.0.0.1 --port 8765
+[admin-dev] Watching for changes: C:\WORK\foreign_worker_job_info\SRC\foreign_worker_life_info_collector
+Admin API listening on http://127.0.0.1:8765
+[storage] schema initialization skipped during recovery
+[storage] PostgreSQL 연결 사용: host=localhost port=5432 database=foreign_worker_job_info user=postgres
+[facebook] Facebook runtime config: page_id=810804142117301, token_env=FACEBOOK_PAGE_ACCESS_TOKEN, page_token=EAANEA...6wZDZD, fingerprint=496fe5a8, user_token_present=True
+[dashboard][WARN] summary query timed out or failed: syntax error at or near "$1"
+LINE 1: SET LOCAL statement_timeout = $1
+                                      ^
+[dashboard][WARN] summary query timed out or failed: syntax error at or near "$1"
+LINE 1: SET LOCAL statement_timeout = $1
+                                      ^

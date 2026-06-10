@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlparse
 
 from ....utils.text_normalizer import normalize_plain_text
+from ...facebook.error_normalizer import (
+    TOKEN_EXPIRING_SOON,
+    build_error_context,
+    classify_internal_error,
+    retryable_for_category,
+    token_status_snapshot,
+)
 from ...facebook.page_client import FacebookPageClient
 from ..category_rotation import hashtags_for_group
 from ..collector.google_news_url_resolver import is_acceptable_source_url, is_google_news_url
@@ -94,7 +102,7 @@ class FacebookPublisher:
         }
         reject_reason = facebook_message_reject_reason(message)
         if reject_reason:
-            return {
+            return with_error_context({
                 "status": "FAILED",
                 "facebook_post_id": "",
                 "facebook_post_url": "",
@@ -108,9 +116,9 @@ class FacebookPublisher:
                 "error_message": reject_reason,
                 "response_code": "",
                 "response_body": "",
-            }
+            }, candidate=candidate, link_url=link_decision.url, mode="dry_run" if dry_run else "real")
         if not link_decision.valid:
-            return {
+            return with_error_context({
                 "status": "FAILED",
                 "facebook_post_id": "",
                 "facebook_post_url": "",
@@ -124,7 +132,7 @@ class FacebookPublisher:
                 "error_message": f"Facebook link card URL is invalid: {link_decision.reject_reason}",
                 "response_code": "",
                 "response_body": "",
-            }
+            }, candidate=candidate, link_url=link_decision.url, mode="dry_run" if dry_run else "real")
         if dry_run:
             facebook_post_id = f"dry-run-news-{candidate.id}"
             return {
@@ -156,7 +164,7 @@ class FacebookPublisher:
             }
         )
         if not page_id or not access_token:
-            return {
+            return with_error_context({
                 "status": "FAILED_RETRYABLE",
                 "facebook_post_id": "",
                 "facebook_post_url": "",
@@ -175,61 +183,53 @@ class FacebookPublisher:
                     "token_fingerprint": token_fingerprint(access_token),
                     "token_env_key": FACEBOOK_PAGE_ACCESS_TOKEN_ENV,
                 },
-            }
-        if not app_token:
-            return {
-                "status": "FAILED_RETRYABLE",
-                "facebook_post_id": "",
-                "facebook_post_url": "",
-                "page_id": page_id,
-                "message": message,
-                "facebook_link_url": link_decision.url,
-                "link_valid_yn": True,
-                "link_reject_reason": "",
-                "request_payload": request_payload,
-                "error_code": "MISSING_FACEBOOK_APP_TOKEN",
-                "error_message": "FACEBOOK_APP_TOKEN이 필요합니다. 게시 전 Page token debug_token 검증에 사용됩니다.",
-                "response_code": "",
-                "response_body": "",
-                "token_debug": {
-                    "token_masked": mask_token(access_token),
-                    "token_fingerprint": token_fingerprint(access_token),
-                    "token_env_key": FACEBOOK_PAGE_ACCESS_TOKEN_ENV,
-                },
-            }
-
-        token_debug = self.client.debug_token(access_token, app_token)
+            }, candidate=candidate, link_url=link_decision.url, mode="real")
         safe_debug = {
             "token_env_key": FACEBOOK_PAGE_ACCESS_TOKEN_ENV,
             "token_masked": mask_token(access_token),
             "token_fingerprint": token_fingerprint(access_token),
-            "token_type": token_debug.get("token_type", ""),
-            "is_valid": token_debug.get("is_valid", False),
-            "profile_id": token_debug.get("profile_id", ""),
-            "scopes": token_debug.get("scopes", []),
-            "expires_at": token_debug.get("expires_at", 0),
-            "app_id": token_debug.get("app_id", ""),
+            "token_type": "",
+            "is_valid": None,
+            "profile_id": "",
+            "scopes": [],
+            "expires_at": 0,
+            "app_id": "",
         }
-        request_payload["token_debug"] = safe_debug
-        if token_debug.get("status") != "OK":
-            return {
-                "status": "FAILED_RETRYABLE",
-                "facebook_post_id": "",
-                "facebook_post_url": "",
-                "page_id": page_id,
-                "message": message,
-                "facebook_link_url": link_decision.url,
-                "link_valid_yn": True,
-                "link_reject_reason": "",
-                "request_payload": request_payload,
-                "error_code": token_debug.get("error_code", "FACEBOOK_DEBUG_TOKEN_FAILED"),
-                "error_message": token_debug.get("error_message", "Facebook token debug에 실패했습니다."),
-                "response_code": token_debug.get("response_code", ""),
-                "response_body": token_debug.get("response_body", ""),
-                "token_debug": safe_debug,
-            }
-        if not safe_debug["is_valid"]:
-            return {
+        token_debug = {}
+        if app_token:
+            token_debug = self.client.debug_token(access_token, app_token)
+            safe_debug.update(
+                {
+                    "token_type": token_debug.get("token_type", ""),
+                    "is_valid": token_debug.get("is_valid", False),
+                    "profile_id": token_debug.get("profile_id", ""),
+                    "scopes": token_debug.get("scopes", []),
+                    "expires_at": token_debug.get("expires_at", 0),
+                    "app_id": token_debug.get("app_id", ""),
+                }
+            )
+            request_payload["token_debug"] = safe_debug
+            if token_debug.get("status") != "OK" and not safe_debug["is_valid"]:
+                return with_error_context({
+                    "status": "FAILED_RETRYABLE",
+                    "facebook_post_id": "",
+                    "facebook_post_url": "",
+                    "page_id": page_id,
+                    "message": message,
+                    "facebook_link_url": link_decision.url,
+                    "link_valid_yn": True,
+                    "link_reject_reason": "",
+                    "request_payload": request_payload,
+                    "error_code": token_debug.get("error_code", "FACEBOOK_DEBUG_TOKEN_FAILED"),
+                    "error_message": token_debug.get("error_message", "Facebook token debug에 실패했습니다."),
+                    "response_code": token_debug.get("response_code", ""),
+                    "response_body": token_debug.get("response_body", ""),
+                    "token_debug": safe_debug,
+                }, candidate=candidate, link_url=link_decision.url, mode="real", token=access_token)
+        else:
+            request_payload["token_debug"] = safe_debug
+        if safe_debug["is_valid"] is False:
+            return with_error_context({
                 "status": "FAILED_RETRYABLE",
                 "facebook_post_id": "",
                 "facebook_post_url": "",
@@ -244,9 +244,9 @@ class FacebookPublisher:
                 "response_code": token_debug.get("response_code", ""),
                 "response_body": token_debug.get("response_body", ""),
                 "token_debug": safe_debug,
-            }
-        if safe_debug["profile_id"] != page_id:
-            return {
+            }, candidate=candidate, link_url=link_decision.url, mode="real", token=access_token)
+        if safe_debug["profile_id"] and safe_debug["profile_id"] != page_id:
+            return with_error_context({
                 "status": "FAILED_RETRYABLE",
                 "facebook_post_id": "",
                 "facebook_post_url": "",
@@ -261,10 +261,10 @@ class FacebookPublisher:
                 "response_code": token_debug.get("response_code", ""),
                 "response_body": token_debug.get("response_body", ""),
                 "token_debug": safe_debug,
-            }
+            }, candidate=candidate, link_url=link_decision.url, mode="real", token=access_token)
         missing_scopes = sorted(REQUIRED_PAGE_SCOPES - set(safe_debug["scopes"]))
-        if missing_scopes:
-            return {
+        if safe_debug["scopes"] and missing_scopes:
+            return with_error_context({
                 "status": "FAILED_RETRYABLE",
                 "facebook_post_id": "",
                 "facebook_post_url": "",
@@ -279,11 +279,11 @@ class FacebookPublisher:
                 "response_code": token_debug.get("response_code", ""),
                 "response_body": token_debug.get("response_body", ""),
                 "token_debug": safe_debug,
-            }
+            }, candidate=candidate, link_url=link_decision.url, mode="real", token=access_token)
 
         result = self.client.publish(message=message, link=link_decision.url, page_id=page_id, access_token=access_token)
         facebook_post_id = result.get("facebook_post_id", "")
-        return {
+        payload = {
             "status": result.get("status", "FAILED"),
             "facebook_post_id": facebook_post_id,
             "facebook_post_url": result.get("facebook_post_url") or (f"https://www.facebook.com/{facebook_post_id}" if facebook_post_id else ""),
@@ -299,6 +299,12 @@ class FacebookPublisher:
             "response_body": result.get("response_body", ""),
             "token_debug": safe_debug,
         }
+        if payload["status"] not in {"PUBLISHED", "DRY_RUN"}:
+            return with_error_context(payload, candidate=candidate, link_url=link_decision.url, mode="real", token=access_token)
+        payload["token_status"] = token_status_snapshot(token=access_token, token_debug=safe_debug, page_id=page_id, required_scopes=REQUIRED_PAGE_SCOPES)
+        if token_expiring_soon(payload["token_status"]):
+            payload["token_warning_category"] = TOKEN_EXPIRING_SOON
+        return payload
 
 
 def _bullet_lines(value: str, limit: int) -> list[str]:
@@ -312,6 +318,52 @@ def _bullet_lines(value: str, limit: int) -> list[str]:
         if cleaned:
             lines.append(f"- {cleaned[:240]}")
     return lines[:limit]
+
+
+def with_error_context(
+    result: dict,
+    *,
+    candidate: NewsCandidate,
+    link_url: str,
+    mode: str,
+    token: str = "",
+) -> dict:
+    token_debug = result.get("token_debug") or {}
+    page_id = str(result.get("page_id") or os.getenv(FACEBOOK_PAGE_ID_ENV, "").strip())
+    token_status = token_status_snapshot(
+        token=token,
+        token_debug=token_debug,
+        page_id=page_id,
+        required_scopes=REQUIRED_PAGE_SCOPES,
+    )
+    context = build_error_context(
+        error_code=str(result.get("error_code") or ""),
+        error_message=str(result.get("error_message") or ""),
+        response_code=str(result.get("response_code") or ""),
+        response_body=str(result.get("response_body") or ""),
+        link_url=link_url,
+        endpoint=f"/{page_id}/feed" if page_id else "",
+        mode=mode,
+        candidate_id=candidate.id,
+        token_status=token_status,
+    )
+    if not context.get("meta_error") and result.get("error_category"):
+        context["error_category"] = result["error_category"]
+        context["retryable_yn"] = retryable_for_category(str(result["error_category"]))
+    category = str(context.get("error_category") or classify_internal_error(result.get("error_code", ""), result.get("error_message", "")))
+    result["error_category"] = category
+    result["token_status"] = token_status
+    result["retryable_yn"] = retryable_for_category(category)
+    result["error_context"] = context
+    return result
+
+
+def token_expiring_soon(token_status: dict) -> bool:
+    value = token_status.get("expires_in_seconds")
+    try:
+        return value != "" and 0 < int(value) <= 7 * 24 * 60 * 60
+    except (TypeError, ValueError):
+        return False
 
 
 def has_korean_text(value: str, max_hangul_chars: int = 6) -> bool:

@@ -8,6 +8,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from .error_normalizer import build_error_context, classify_meta_error, meta_error_from_body, retryable_for_category
+
 
 class FacebookPageClient:
     def __init__(self, timeout: int | None = None):
@@ -128,6 +130,7 @@ class FacebookPageClient:
         raw = exc.read().decode("utf-8", errors="replace")
         error_code = "FACEBOOK_HTTP_ERROR"
         error_message = raw[:500]
+        meta_error = meta_error_from_body(raw)
         try:
             payload = json.loads(raw)
             error = payload.get("error") or {}
@@ -135,40 +138,26 @@ class FacebookPageClient:
             error_message = str(error.get("message") or raw)[:500]
         except json.JSONDecodeError:
             pass
-        retryable = exc.code in {408, 409, 425, 429, 500, 502, 503, 504}
-        lowered = error_message.lower()
-        token_expired = exc.code in {400, 401, 403} and any(
-            word in lowered for word in ("expired", "session has expired", "token has expired", "oauth")
-        )
-        token_or_permission = exc.code in {400, 401, 403} and any(
-            word in lowered for word in ("token", "permission", "permissions", "oauth", "session")
-        )
-        permission_error = exc.code in {400, 401, 403} and any(
-            phrase in lowered
-            for phrase in (
-                "pages_manage_posts",
-                "pages_read_engagement",
-                "sufficient administrative permission",
-                "publish_to_groups",
-                "requires app being installed",
-            )
+        category = classify_meta_error(meta_error, exc.code) if meta_error else "FACEBOOK_API_TEMPORARY" if exc.code in {408, 409, 425, 429, 500, 502, 503, 504} else "FACEBOOK_UNKNOWN_ERROR"
+        retryable = retryable_for_category(category)
+        context = build_error_context(
+            error_code=error_code,
+            error_message=error_message,
+            response_code=str(exc.code),
+            response_body=raw,
         )
         return {
             "status": "FAILED_RETRYABLE" if retryable else "FAILED",
             "facebook_post_id": "",
             "facebook_post_url": "",
-            "error_code": (
-                "FACEBOOK_PERMISSION_ERROR"
-                if permission_error
-                else "FACEBOOK_TOKEN_EXPIRED"
-                if token_expired
-                else "FACEBOOK_TOKEN_OR_PERMISSION_ERROR"
-                if token_or_permission
-                else error_code
-            ),
+            "error_code": error_code,
+            "error_category": category,
             "error_message": error_message,
+            "meta_error": meta_error,
+            "retryable_yn": retryable,
             "response_code": str(exc.code),
             "response_body": raw[:1000],
+            "error_context": context,
         }
 
     def _safe_body(self, payload: dict) -> str:

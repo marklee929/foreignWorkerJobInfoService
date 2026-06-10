@@ -18,6 +18,7 @@ from .duplicate_guard.duplicate_detector import check_duplicate
 from .duplicate_guard.llama_duplicate_checker import LlamaDuplicateChecker
 from .category_rotation import (
     GROUP_THRESHOLDS,
+    SEARCH_KEYWORDS,
     category_group,
     group_threshold,
     recent_category_ratio,
@@ -197,7 +198,7 @@ class NewsPipeline:
             "report": self.build_report(dry_run, len(collected_items), len(saved_candidates), final_candidates, selected_candidates, publish_results, selection.get("threshold_used", 0)),
         }
 
-    def collect(self, keyword: str, allow_seed: bool = False) -> list[NewsItem]:
+    def collect_single_keyword_legacy(self, keyword: str, allow_seed: bool = False) -> list[NewsItem]:
         items: list[NewsItem] = []
         for collector in self.collectors:
             try:
@@ -220,9 +221,51 @@ class NewsPipeline:
         self.repository.insert_pipeline_log("collect", "SKIPPED", "영문 기사 수집 결과가 없어 이번 사이클은 게시 없이 종료합니다.")
         return self._dry_run_seed_items(keyword) if allow_seed and os.getenv("NEWS_DRY_RUN_USE_SEED", "").lower() in {"1", "true", "yes"} else []
 
+    def collect(self, keyword: str, allow_seed: bool = False) -> list[NewsItem]:
+        items: list[NewsItem] = []
+        search_terms = collector_search_keywords(keyword) if uses_default_news_collectors(self.collectors) else [(keyword, keyword_category_hint(keyword))]
+        per_query_limit = max(1, min(int(os.getenv("NEWS_COLLECTOR_LIMIT_PER_QUERY", "5") or "5"), 20))
+        self.repository.insert_pipeline_log(
+            "collect",
+            "STARTED",
+            f"category search keywords: {len(search_terms)} terms / {', '.join(term for term, _category in search_terms[:8])}",
+        )
+        for search_keyword, category_hint in search_terms:
+            for collector in self.collectors:
+                try:
+                    self.repository.insert_pipeline_log(
+                        "collect",
+                        "STARTED",
+                        f"{collector.__class__.__name__} collect start: {search_keyword} / {category_hint}",
+                    )
+                    collected = collect_with_optional_limit(collector, search_keyword, per_query_limit)
+                    english_items = []
+                    for index, item in enumerate(collected, start=1):
+                        if is_english_article(item):
+                            item.language = "en"
+                            item.keyword = search_keyword
+                            if not item.category or item.category == "foreign_jobs":
+                                item.category = category_hint
+                            english_items.append(item)
+                            self.repository.insert_pipeline_log("collect", "COMPLETED", f"{collector.__class__.__name__} English article {index}: {item.title[:120]}")
+                        else:
+                            self.repository.insert_pipeline_log("collect", "SKIPPED", f"{collector.__class__.__name__} non-English article {index}: {item.title[:120]}")
+                    items.extend(english_items)
+                    self.repository.insert_pipeline_log(
+                        "collect",
+                        "COMPLETED",
+                        f"{collector.__class__.__name__} completed: keyword '{search_keyword}', total {len(collected)}, English {len(english_items)}",
+                    )
+                except Exception as exc:
+                    self.repository.insert_pipeline_log("collect", "FAILED", f"{collector.__class__.__name__} failed for '{search_keyword}': {str(exc)[:180]}")
+        if items:
+            return items
+        self.repository.insert_pipeline_log("collect", "SKIPPED", "No English article collected for this cycle.")
+        return self._dry_run_seed_items(keyword) if allow_seed and os.getenv("NEWS_DRY_RUN_USE_SEED", "").lower() in {"1", "true", "yes"} else []
+
     def save_normalized(self, item: NewsItem, keyword: str) -> NewsCandidate:
         candidate = normalize_news_item(NewsCandidate.from_item(item))
-        candidate.keyword = keyword
+        candidate.keyword = item.keyword or keyword
         candidate.cycle_id = today_cycle_id(parse_iso(candidate.collected_at))
         candidate.status = "NORMALIZED"
         candidate.publish_status = "NORMALIZED"
@@ -253,10 +296,10 @@ class NewsPipeline:
 
         summary = self.summarizer.summarize(candidate)
         if not dry_run and (not summary.short_summary or summary.risk_notes.startswith("Rule-based summary")):
-            candidate.status = "FAILED"
-            candidate.publish_status = "FAILED"
+            candidate.status = "FAILED_RETRYABLE"
+            candidate.publish_status = "FAILED_RETRYABLE"
             candidate.fail_reason = "Local LLaMA 요약 응답 실패 또는 시간 초과로 게시 중단"
-            self.repository.insert_pipeline_log("llama_summary", "FAILED", candidate.fail_reason, candidate.id)
+            self.repository.insert_pipeline_log("llama_summary", "FAILED_RETRYABLE", candidate.fail_reason, candidate.id)
             self.telegram_notifier.notify_failure(candidate, candidate.fail_reason, dry_run=False)
             return self.repository.update_candidate(candidate)
 
@@ -370,7 +413,10 @@ class NewsPipeline:
                 content_error = str(exc)[:300]
 
         if candidate.source_url or content_error or content_status != "URL_MISSING":
-            self.repository.update_article_recovery(candidate, content_status, content_error)
+            if hasattr(self.repository, "update_article_recovery"):
+                self.repository.update_article_recovery(candidate, content_status, content_error)
+            else:
+                self.repository.update_candidate(candidate)
             if recovery_source:
                 self.repository.insert_pipeline_log(
                     "article_recovery",
@@ -528,8 +574,16 @@ class NewsPipeline:
         window_start = self.publish_window_start(now)
         window_start_iso = window_start.isoformat()
         recent_cutoff = now - timedelta(hours=1)
-        window_candidates = self.repository.list_publish_candidates_since(window_start_iso, limit=1000)
-        queue_candidates = self.repository.list_publish_queue(limit=1000)
+        window_candidates = (
+            self.repository.list_publish_candidates_since(window_start_iso, limit=1000)
+            if hasattr(self.repository, "list_publish_candidates_since")
+            else self.repository.list_candidates()
+        )
+        queue_candidates = (
+            self.repository.list_publish_queue(limit=1000)
+            if hasattr(self.repository, "list_publish_queue")
+            else self.repository.list_ready_for_cycle(cycle_id, limit=1000)
+        )
         candidate_map = {candidate.id: candidate for candidate in queue_candidates if candidate.id is not None}
         candidate_map.update({candidate.id: candidate for candidate in window_candidates if candidate.id is not None})
         all_candidates = list(candidate_map.values())
@@ -668,6 +722,7 @@ class NewsPipeline:
 
         remaining_ready_count = max(0, len([candidate for candidate in prepared_candidates if candidate.publish_status == "READY_TO_PUBLISH"]) - (1 if selected else 0))
         final_top = publishable[:10] if publishable else []
+        effective_minimum_safe_score = min(self.minimum_publish_score(), threshold_used) if selected else self.minimum_publish_score()
         return {
             "cycle_id": cycle_id,
             "publish_window_start": window_start_iso,
@@ -680,7 +735,7 @@ class NewsPipeline:
             "today_article_count": today_article_count,
             "today_unposted_count": today_unposted_count,
             "today_avg_score": today_avg_score,
-            "minimum_safe_score": self.minimum_publish_score(),
+            "minimum_safe_score": effective_minimum_safe_score,
             "threshold_used": threshold_used,
             "threshold_sequence": [{"label": group, "threshold": group_threshold(group, relaxed=False), "relaxed_threshold": group_threshold(group, relaxed=True)} for group in ("PRIMARY", "SECONDARY", "TERTIARY")],
             "target_category_group": target,
@@ -708,7 +763,7 @@ class NewsPipeline:
                 "expanded_candidate_count": len(expanded_candidates),
                 "today_article_count": today_article_count,
                 "today_unposted_count": today_unposted_count,
-                "minimum_safe_score": self.minimum_publish_score(),
+                "minimum_safe_score": effective_minimum_safe_score,
                 "threshold_used": threshold_used,
                 "target_category_group": target,
                 "primary_candidate_count": len(pools["PRIMARY"]),
@@ -1116,8 +1171,12 @@ class NewsPipeline:
         facebook_post_url = publish_result.get("facebook_post_url", "")
         error_code = publish_result.get("error_code", "")
         error_message = publish_result.get("error_message", "")
+        error_category = publish_result.get("error_category", "")
+        error_context = publish_result.get("error_context") or {}
+        retryable_yn = bool(publish_result.get("retryable_yn", status == "FAILED_RETRYABLE"))
         message_preview = publish_result.get("message", "")[:1000]
         token_debug = publish_result.get("token_debug") or {}
+        token_status = publish_result.get("token_status") or {}
         request_payload = publish_result.get("request_payload") or {}
         if token_debug:
             self.repository.insert_pipeline_log(
@@ -1147,7 +1206,12 @@ class NewsPipeline:
             response_body=json.dumps(
                 {
                     "facebook_response": publish_result.get("response_body", ""),
+                    "error_category": error_category,
+                    "error_context": error_context,
+                    "meta_error": error_context.get("meta_error", {}),
                     "token_debug": token_debug,
+                    "token_status": token_status,
+                    "retryable_yn": retryable_yn,
                     "facebook_link_url": publish_result.get("facebook_link_url", ""),
                     "link_valid_yn": publish_result.get("link_valid_yn", False),
                     "link_reject_reason": publish_result.get("link_reject_reason", ""),
@@ -1180,7 +1244,14 @@ class NewsPipeline:
             candidate.facebook_post_id = facebook_post_id
             self.repository.insert_pipeline_log("facebook_publish", "COMPLETED", f"Facebook 게시 완료: {candidate.title}", candidate.id)
         else:
-            manual_repost_issue = error_code in {
+            manual_repost_issue = error_category in {
+                "TOKEN_INVALID",
+                "TOKEN_EXPIRED",
+                "TOKEN_PERMISSION_MISSING",
+                "TOKEN_WRONG_TYPE",
+                "TOKEN_PAGE_MISMATCH",
+                "INTERNAL_ENV_MISSING",
+            } or error_code in {
                 "FACEBOOK_TOKEN_EXPIRED",
                 "FACEBOOK_TOKEN_INVALID",
                 "FACEBOOK_PAGE_TOKEN_MISMATCH",
@@ -1190,7 +1261,7 @@ class NewsPipeline:
                 "MISSING_FACEBOOK_ENV",
                 "MISSING_FACEBOOK_APP_TOKEN",
             }
-            next_status = "FAILED_RETRYABLE" if manual_repost_issue else "AUTO_RETRY_BLOCKED" if candidate.publish_attempt_count >= 3 else "FAILED_RETRYABLE"
+            next_status = "FAILED_RETRYABLE" if retryable_yn else "FAILED_PERMISSION" if manual_repost_issue else "AUTO_RETRY_BLOCKED" if candidate.publish_attempt_count >= 3 else "FAILED_RETRYABLE"
             self.repository.mark_status(
                 candidate.id,
                 next_status,
@@ -1203,7 +1274,7 @@ class NewsPipeline:
             candidate.publish_status = next_status
             candidate.fail_reason = error_message
             if manual_repost_issue:
-                token_alert = self.telegram_notifier.notify_facebook_error(candidate, error_message, next_status, dry_run=dry_run)
+                token_alert = self.telegram_notifier.notify_facebook_error(candidate, error_message, next_status, dry_run=dry_run, publish_result=publish_result)
                 self.repository.insert_telegram_log(
                     news_candidate_id=candidate.id,
                     message=token_alert.get("message", ""),
@@ -1220,6 +1291,7 @@ class NewsPipeline:
             facebook_post_url=facebook_post_url,
             error_message=error_message,
             dry_run=dry_run,
+            publish_result=publish_result,
         )
         self.repository.insert_telegram_log(
             news_candidate_id=candidate.id,
@@ -1248,9 +1320,14 @@ class NewsPipeline:
             "message": publish_result.get("message", ""),
             "error_message": error_message or notify_result.get("error_message", ""),
             "token_debug": token_debug,
+            "error_category": error_category,
+            "error_context": error_context,
+            "retryable_yn": retryable_yn,
         }
 
     def expire_old_unposted_candidates(self, cycle_id: str = "") -> None:
+        if not hasattr(self.repository, "restore_auto_expired_unposted"):
+            return
         restored = self.repository.restore_auto_expired_unposted()
         if restored:
             self.repository.insert_pipeline_log(
@@ -1484,6 +1561,87 @@ def parse_iso(value: str | None) -> datetime:
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except ValueError:
         return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def collector_search_keywords(default_keyword: str) -> list[tuple[str, str]]:
+    configured = [
+        item.strip()
+        for item in os.getenv("NEWS_COLLECTOR_SEARCH_KEYWORDS", "").split("|")
+        if item.strip()
+    ]
+    if configured:
+        terms = [(item, keyword_category_hint(item)) for item in configured]
+    elif os.getenv("NEWS_COLLECTOR_MULTI_KEYWORD_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}:
+        primary_limit = max(1, min(int(os.getenv("NEWS_COLLECTOR_PRIMARY_KEYWORDS", "3") or "3"), len(SEARCH_KEYWORDS["PRIMARY"])))
+        secondary_limit = max(1, min(int(os.getenv("NEWS_COLLECTOR_SECONDARY_KEYWORDS", "3") or "3"), len(SEARCH_KEYWORDS["SECONDARY"])))
+        tertiary_limit = max(0, min(int(os.getenv("NEWS_COLLECTOR_TERTIARY_KEYWORDS", "2") or "2"), len(SEARCH_KEYWORDS["TERTIARY"])))
+        raw_terms: list[str] = [default_keyword]
+        raw_terms.extend(SEARCH_KEYWORDS["PRIMARY"][:primary_limit])
+        raw_terms.extend(SEARCH_KEYWORDS["SECONDARY"][:secondary_limit])
+        raw_terms.extend(SEARCH_KEYWORDS["TERTIARY"][:tertiary_limit])
+        terms = [(item, keyword_category_hint(item)) for item in raw_terms if item.strip()]
+    else:
+        terms = [(default_keyword, keyword_category_hint(default_keyword))]
+
+    deduped: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    max_terms = max(1, min(int(os.getenv("NEWS_COLLECTOR_MAX_SEARCH_TERMS", "9") or "9"), 30))
+    for term, category in terms:
+        key = term.strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append((term.strip(), category))
+        if len(deduped) >= max_terms:
+            break
+    return deduped
+
+
+def collect_with_optional_limit(collector, keyword: str, limit: int) -> list[NewsItem]:
+    try:
+        return collector.collect(keyword, limit=limit)
+    except TypeError as exc:
+        if "limit" not in str(exc):
+            raise
+        return collector.collect(keyword)
+
+
+def uses_default_news_collectors(collectors: list) -> bool:
+    default_names = {"NaverNewsCollector", "GoogleNewsCollector", "RSSNewsCollector"}
+    return all(collector.__class__.__name__ in default_names for collector in collectors)
+
+
+def keyword_category_hint(keyword: str) -> str:
+    text = (keyword or "").lower()
+    if any(token in text for token in ("housing", "rent", "bank", "health", "transport", "cost of living", "language", "support center", "living guide")):
+        if "housing" in text or "rent" in text:
+            return "housing"
+        if "bank" in text:
+            return "banking"
+        if "health" in text:
+            return "healthcare"
+        if "transport" in text:
+            return "transportation"
+        if "language" in text:
+            return "korean_language"
+        if "cost of living" in text:
+            return "cost_of_living"
+        return "settlement_life"
+    if any(token in text for token in ("travel", "culture", "expat", "local life", "living in seoul", "living in busan")):
+        if "travel" in text:
+            return "travel"
+        if "culture" in text:
+            return "culture"
+        return "lifestyle"
+    if "visa" in text or "e-9" in text or "e-7" in text:
+        return "work_visa"
+    if "immigration" in text:
+        return "immigration"
+    if "labor rights" in text or "migrant workers" in text:
+        return "labor_rights"
+    if "employment" in text or "skilled worker" in text:
+        return "employment_policy"
+    return "foreign_jobs"
 
 
 def is_english_article(item: NewsItem) -> bool:

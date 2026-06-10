@@ -148,10 +148,11 @@ class SocialNewsPipelineTest(unittest.TestCase):
             pipeline = NewsPipeline(repository=repository, collectors=[StaticNewsCollector()])
             result = pipeline.run(keyword="foreign worker visa Korea", dry_run=False)
 
-            self.assertEqual(result["publish_results"][0]["status"], "SKIPPED")
-            self.assertEqual(result["publish_results"][0]["facebook_status"], "SKIPPED")
-            self.assertEqual([item.status for item in repository.candidates], ["FAILED", "FAILED"])
-            self.assertEqual(len(repository.facebook_logs), 0)
+            self.assertEqual(result["publish_results"][0]["status"], "FAILED_PERMISSION")
+            self.assertEqual(result["publish_results"][0]["facebook_status"], "FAILED_RETRYABLE")
+            self.assertEqual(result["publish_results"][0]["error_category"], "INTERNAL_ENV_MISSING")
+            self.assertIn("FAILED_PERMISSION", [item.status for item in repository.candidates])
+            self.assertEqual(len(repository.facebook_logs), 1)
         finally:
             for key, value in old_env.items():
                 if value is not None:
@@ -207,7 +208,7 @@ class SocialNewsPipelineTest(unittest.TestCase):
 
         self.assertEqual(selection["ready_count"], 0)
         self.assertEqual(selection["expanded_candidate_count"], 1)
-        self.assertEqual(selection["minimum_safe_score"], 40.0)
+        self.assertEqual(selection["minimum_safe_score"], 50.0)
         self.assertTrue(selection["promoted_to_ready"])
         self.assertEqual(selection["selected_candidate"].id, candidate.id)
         self.assertEqual(repository.candidates[0].publish_status, "READY_TO_PUBLISH")

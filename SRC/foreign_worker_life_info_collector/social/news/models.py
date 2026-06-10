@@ -20,6 +20,7 @@ class NewsItem:
     image_urls: list[str] | None = None
     language: str = "ko"
     category: str = ""
+    keyword: str = ""
 
 
 @dataclass
@@ -109,6 +110,7 @@ class NewsCandidate:
             language=item.language,
             category=item.category,
             content_category=item.category,
+            keyword=item.keyword,
         )
 
     def to_dict(self) -> dict:

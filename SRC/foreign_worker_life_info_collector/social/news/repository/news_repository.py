@@ -15,6 +15,12 @@ from ..normalizer.news_normalizer import normalize_news_item
 
 MIGRATION_PATH = Path(__file__).resolve().parents[3] / "storage" / "db" / "migrations" / "2026_06_02_postgres_runtime_storage.sql"
 
+
+def should_initialize_schema() -> bool:
+    import os
+
+    return os.getenv("NEWS_REPOSITORY_INIT_SCHEMA", "false").strip().lower() in {"1", "true", "yes", "on"}
+
 NEWS_SELECT = """
     id,
     source_type,
@@ -103,9 +109,10 @@ def json_list(value: Any) -> list[str]:
 class NewsRepository:
     def __init__(self) -> None:
         load_env_file()
-        self.initialize()
 
     def initialize(self) -> None:
+        if not should_initialize_schema():
+            return
         with connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(MIGRATION_PATH.read_text(encoding="utf-8"))
@@ -384,6 +391,7 @@ class NewsRepository:
         occurrence_hash = stable_hash(f"{source_hash}:{candidate.collected_at}:{runtime_cycle_id}:{candidate.source_type}")
         with connect() as conn:
             with conn.cursor() as cur:
+                cur.execute("SET LOCAL lock_timeout = '5s'")
                 cur.execute(
                     """
                     INSERT INTO social_news.raw_item(
