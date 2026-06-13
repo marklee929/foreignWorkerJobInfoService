@@ -20,6 +20,7 @@ External Sources
 → Database / Content Management
 → Admin Frontend
 → Facebook Page
+```
 
 Current first channel:
 
@@ -32,8 +33,10 @@ Local admin web UI
 Current runtime:
 
 Local PC before production deployment
-Main Components
-1. Facebook Page
+
+## Main Components
+
+### 1. Facebook Page
 
 The Facebook Page is the first public delivery channel.
 
@@ -55,7 +58,7 @@ Facebook is a delivery channel, not the core product.
 
 The core product is the structured information system behind it.
 
-2. Admin Frontend
+### 2. Admin Frontend
 
 The admin frontend is the operator control screen.
 

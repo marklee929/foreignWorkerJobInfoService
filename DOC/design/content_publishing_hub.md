@@ -1,5 +1,20 @@
 # Content Publishing Hub
 
+## Harness Status
+
+Status: current design reference with protected implementation items.
+
+This document aligns with the current architecture direction that `content.content_candidate` and `content.publish_log` should become the final publishing hub.
+
+Implementation items that change scheduler behavior, Facebook publishing behavior, token usage, publish frequency, or automatic selection are protected changes and require explicit approval.
+
+Use together with:
+
+- `DOC/database/03_CONTENT_CURRENT.md`
+- `DOC/database/TO_BE_DB_ARCHITECTURE.md`
+- `DOC/to-be/CONTENT_PIPELINE_REFACTOR.md`
+- `DOC/architecture/06_WORK_AREA_REGISTRY.md`
+
 ## Current Decision
 
 News collection and Facebook publishing are being separated.

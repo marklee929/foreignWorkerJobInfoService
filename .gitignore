@@ -19,3 +19,9 @@ out/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local secrets / runtime token cache
+.env
+.env.*
+facebook_config.json
+**/facebook_config.json

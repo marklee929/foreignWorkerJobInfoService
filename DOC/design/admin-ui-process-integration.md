@@ -1,5 +1,28 @@
 # Admin UI Process and Module Integration
 
+## Harness Status
+
+Status: legacy design reference.
+
+This document was written before the current PostgreSQL/admin API/content-hub architecture was fully reflected in `DOC/architecture` and `DOC/database`.
+
+Use the following as current references before implementing any item from this document:
+
+- `DOC/architecture/03_SYSTEM_ARCHITECTURE.md`
+- `DOC/architecture/04_LOCAL_DEVELOPMENT_RUNTIME_GUIDE.md`
+- `DOC/architecture/06_WORK_AREA_REGISTRY.md`
+- `DOC/database/00_DB_ARCHITECTURE_INDEX.md`
+- `DOC/database/01_CURRENT_DB_MAP.md`
+- `DOC/database/03_CONTENT_CURRENT.md`
+
+Known outdated assumptions:
+
+- SQLite is described as the runtime repository in several places.
+- The admin UI is described as not connected to backend APIs.
+- Direct social-news publishing appears as a main pipeline path.
+
+Do not implement from this document directly. Convert any actionable item into a `CODE_TASK_CANDIDATE` first.
+
 이 문서는 `SRC/foreign_worker_life_info_collector` 전체 기준으로 Web UI, CrewTeam, social/news 파이프라인, 저장소 모듈이 어떻게 연결되어야 하는지 정리한다.
 
 현재 Vue 관리자 화면은 개발 가능한 프론트엔드 초안이며, 아직 Python 파이프라인이나 DB와 직접 연결되어 있지 않다. UI는 `admin_ui/src/data/defaultAdminState.js`의 기본 운영 상태를 사용하고, 실제 동작은 `run.bat` 또는 Python CLI를 통해 실행된다.

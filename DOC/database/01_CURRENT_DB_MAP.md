@@ -1,6 +1,3 @@
-# 01_CURRENT_DB_MAP.md
-
-```md
 # Current DB Map
 
 ## 1. Purpose
@@ -21,7 +18,7 @@ content publishing
 occupation dictionary
 immigration/living/domain expansion
 logging and runtime status
-````
+```
 
 Because these responsibilities are mixed in one physical database, schema-level separation is required to understand the current system.
 
@@ -173,7 +170,7 @@ Official notices can be legally sensitive and should not be auto-published witho
 The full current ERD is stored as a snapshot image.
 
 ```text
-DOC/database/snapshots/Foreign_Worker_Job_Info_DB.png
+DOC/database/Foreign_Worker_Job_Info_DB.png
 ```
 
 The full ERD should be used to verify physical structure only.
@@ -301,7 +298,5 @@ This document should not include target design decisions except where marked as 
 Target architecture belongs to:
 
 ```text
-10_TO_BE_DB_ARCHITECTURE.md
-11_TO_BE_CONTENT_FLOW.md
-12_MIGRATION_ROADMAP.md
+TO_BE_DB_ARCHITECTURE.md
 ```

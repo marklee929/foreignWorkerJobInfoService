@@ -23,7 +23,7 @@ user need
 → publishing or review
 → user reaction
 → knowledge improvement
-````
+```
 
 The system should not treat collection as the final goal.
 

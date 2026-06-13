@@ -33,7 +33,7 @@ from ..social.news.collector.article_text_extractor import fetch_article_metadat
 from ..social.news.collector.google_news_url_resolver import is_acceptable_source_url, resolve_google_news_url
 from ..social.news.evaluator.candidate_evaluator import CandidateEvaluator
 from ..social.news.pipeline import NewsPipeline, today_cycle_id
-from ..social.news.publisher.facebook_publisher import FacebookPublisher, facebook_runtime_config_summary
+from ..social.news.publisher.facebook_publisher import FacebookPublisher, facebook_runtime_config_summary, validate_facebook_article_link
 from ..social.news.repository.news_repository import NewsRepository, safe_url
 from ..social.news.summarizer.news_summarizer import NewsSummarizer
 from ..storage.db.postgres import connect, load_env_file, safe_connection_summary
@@ -68,6 +68,8 @@ JOB_COLLECTOR_SCHEDULER_STOP = threading.Event()
 ARTICLE_CLEANUP_THREAD: threading.Thread | None = None
 ARTICLE_CLEANUP_STOP = threading.Event()
 ARTICLE_CLEANUP_LOCK = threading.Lock()
+DASHBOARD_SUMMARY_CACHE: dict[str, Any] = {"expires_at": 0.0, "payload": None}
+DASHBOARD_SUMMARY_LOCK = threading.Lock()
 LLAMA_STATE = {
     "enabled": False,
     "connected": False,
@@ -201,7 +203,7 @@ def fetch_one_with_timeout(sql: str, params: tuple[Any, ...] = (), timeout_ms: i
     try:
         with connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("SET LOCAL statement_timeout = %s", (timeout_ms,))
+                cur.execute("SELECT set_config('statement_timeout', %s, true)", (f"{int(timeout_ms)}ms",))
                 cur.execute(sql, params)
                 row = cur.fetchone()
                 columns = [column.name for column in cur.description] if cur.description else []
@@ -335,6 +337,19 @@ def run_bot_loop() -> None:
                 continue
             write_bot_log("cycle", "STARTED", "뉴스 자동 게시 사이클 시작")
             try:
+                try:
+                    content_result = run_content_publish_cycle()
+                except Exception as exc:
+                    content_result = {"ok": False, "sync": {}, "publish": {"status": "FAILED", "error_message": str(exc)[:180]}}
+                content_publish = content_result.get("publish", {}) if isinstance(content_result, dict) else {}
+                write_bot_log(
+                    "content_publish",
+                    content_publish.get("status", "COMPLETED"),
+                    (
+                        f"Content publish cycle: sync {content_result.get('sync', {}).get('synced_total', 0) if isinstance(content_result, dict) else 0} rows, "
+                        f"publish {content_publish.get('status', '-')}, candidate {content_publish.get('candidate_id', '-')}"
+                    ),
+                )
                 result = NewsBot().run(keyword=keyword, dry_run=False, limit=1)
             except Exception as exc:
                 if not is_retryable_db_error(exc):
@@ -543,6 +558,19 @@ def content_service() -> ContentService:
     if _CONTENT_SERVICE is None:
         _CONTENT_SERVICE = ContentService(repository=content_repository())
     return _CONTENT_SERVICE
+
+
+def module_enabled(module_key: str) -> bool:
+    row = fetch_one("SELECT is_enabled FROM admin.module_config WHERE module_key = %s", (module_key,))
+    return bool(row.get("is_enabled"))
+
+
+def run_content_publish_cycle() -> dict[str, Any]:
+    if not module_enabled("content.publisher"):
+        return {"ok": True, "status": "DISABLED", "message": "content.publisher is disabled"}
+    sync_result = content_service().sync_all(limit=200)
+    publish_result = content_service().publish_next(dry_run=False)
+    return {"ok": True, "sync": sync_result, "publish": publish_result}
 
 
 def immigration_dashboard() -> dict[str, Any]:
@@ -1210,56 +1238,6 @@ def module_rows() -> list[dict[str, Any]]:
 
 
 def dashboard_summary() -> dict[str, Any]:
-    window_start = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-    candidate_estimate = fetch_one(
-        """
-        SELECT GREATEST(COALESCE((SELECT reltuples::bigint FROM pg_class WHERE oid = 'social_news.candidate'::regclass), 0), 0)::int AS candidate_count
-        """
-    )
-    module_counts = fetch_one(
-        """
-        SELECT
-            COUNT(*)::int AS module_count,
-            COUNT(*) FILTER (WHERE is_enabled)::int AS enabled_module_count,
-            COUNT(*) FILTER (WHERE NOT is_enabled)::int AS disabled_module_count
-        FROM admin.module_config
-        """
-    )
-    latest_cycle = fetch_one_with_timeout(
-        """
-        SELECT status, dry_run, started_at, ended_at
-        FROM social_news.pipeline_cycle
-        ORDER BY started_at DESC
-        LIMIT 1
-        """,
-        timeout_ms=1000,
-    )
-    return {
-        "candidate_count": candidate_estimate.get("candidate_count", 0),
-        "today_ready_count": 0,
-        "previous_post_expired_count": 0,
-        "published_count": 0,
-        "post_expired_count": 0,
-        "duplicate_count": 0,
-        "failed_count": 0,
-        "today_article_count": 0,
-        "today_unposted_count": 0,
-        "avg_score": 0,
-        "ready_count": 0,
-        "retryable_count": 0,
-        "posted_today_count": 0,
-        "primary_candidate_count": 0,
-        "secondary_candidate_count": 0,
-        "tertiary_candidate_count": 0,
-        "recent_24h_category_ratio": {},
-        "target_publish_ratio": "disabled during recovery",
-        **module_counts,
-        "latest_cycle": latest_cycle,
-        "cooldown": {"active": False, "next_publish_at": "", "remaining_seconds": 0},
-        "cooldown_active": False,
-        "next_publish_at": "",
-        "publish_window_start": window_start,
-    }
     pipeline = NewsPipeline(repository=news_repository(), collectors=[])
     window_start = pipeline.publish_window_start().isoformat()
     candidate_counts = fetch_one_with_timeout(
@@ -1268,17 +1246,15 @@ def dashboard_summary() -> dict[str, Any]:
             COUNT(*)::int AS candidate_count,
             COUNT(*) FILTER (
                 WHERE publish_status = 'READY_TO_PUBLISH'
-                  AND collected_at >= %s
+                  AND COALESCE(last_seen_at, collected_at) >= %s
                   AND COALESCE(post_expired, FALSE) = FALSE
                   AND COALESCE(is_representative, TRUE) = TRUE
                   AND published_at IS NULL
                   AND COALESCE(facebook_post_url, '') = ''
                   AND COALESCE(risk_level, '') != 'HIGH'
-                  AND COALESCE(generated_summary_en, '') !~ '[가-힣]'
-                  AND COALESCE(generated_why_it_matters_en, '') !~ '[가-힣]'
             )::int AS today_ready_count,
             COUNT(*) FILTER (
-                WHERE collected_at < %s
+                WHERE COALESCE(last_seen_at, collected_at) < %s
                   AND publish_status = 'POST_EXPIRED'
             )::int AS previous_post_expired_count,
             COUNT(*) FILTER (
@@ -1294,19 +1270,20 @@ def dashboard_summary() -> dict[str, Any]:
         FROM social_news.candidate
         """,
         (window_start, window_start),
+        timeout_ms=8000,
     )
     publish_metrics = fetch_one_with_timeout(
         """
         SELECT
-            COUNT(*) FILTER (WHERE collected_at >= %s)::int AS today_article_count,
+            COUNT(*) FILTER (WHERE COALESCE(last_seen_at, collected_at) >= %s)::int AS today_article_count,
             COUNT(*) FILTER (
-                WHERE collected_at >= %s
+                WHERE COALESCE(last_seen_at, collected_at) >= %s
                   AND COALESCE(post_expired, FALSE) = FALSE
                   AND published_at IS NULL
                   AND COALESCE(facebook_post_url, '') = ''
                   AND COALESCE(publish_status, '') NOT IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'POST_EXPIRED', 'ARCHIVED', 'AUTO_RETRY_BLOCKED')
             )::int AS today_unposted_count,
-            ROUND(AVG(evaluation_score) FILTER (WHERE collected_at >= %s AND evaluation_score > 0), 2) AS avg_score,
+            ROUND(AVG(evaluation_score) FILTER (WHERE COALESCE(last_seen_at, collected_at) >= %s AND evaluation_score > 0), 2) AS avg_score,
             COUNT(*) FILTER (
                 WHERE publish_status = 'READY_TO_PUBLISH'
                   AND COALESCE(post_expired, FALSE) = FALSE
@@ -1314,33 +1291,33 @@ def dashboard_summary() -> dict[str, Any]:
                   AND published_at IS NULL
                   AND COALESCE(facebook_post_url, '') = ''
                   AND COALESCE(risk_level, '') != 'HIGH'
-                  AND COALESCE(generated_summary_en, '') !~ '[가-힣]'
-                  AND COALESCE(generated_why_it_matters_en, '') !~ '[가-힣]'
             )::int AS ready_count,
             COUNT(*) FILTER (
-                WHERE collected_at >= %s
+                WHERE COALESCE(last_seen_at, collected_at) >= %s
                   AND publish_status = 'FAILED_RETRYABLE'
                   AND COALESCE(post_expired, FALSE) = FALSE
                   AND published_at IS NULL
             )::int AS retryable_count,
             COUNT(*) FILTER (
-                WHERE collected_at >= %s
+                WHERE COALESCE(last_seen_at, collected_at) >= %s
                   AND publish_status IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED')
             )::int AS posted_today_count
         FROM social_news.candidate
         """,
         (window_start, window_start, window_start, window_start, window_start),
+        timeout_ms=8000,
     )
     cooldown = pipeline.publish_cooldown_info()
     category_metrics = fetch_one_with_timeout(
         """
         SELECT
-            COUNT(*) FILTER (WHERE collected_at >= %s AND content_priority_group = 'PRIMARY')::int AS primary_candidate_count,
-            COUNT(*) FILTER (WHERE collected_at >= %s AND content_priority_group = 'SECONDARY')::int AS secondary_candidate_count,
-            COUNT(*) FILTER (WHERE collected_at >= %s AND content_priority_group = 'TERTIARY')::int AS tertiary_candidate_count
+            COUNT(*) FILTER (WHERE COALESCE(last_seen_at, collected_at) >= %s AND content_priority_group = 'PRIMARY')::int AS primary_candidate_count,
+            COUNT(*) FILTER (WHERE COALESCE(last_seen_at, collected_at) >= %s AND content_priority_group = 'SECONDARY')::int AS secondary_candidate_count,
+            COUNT(*) FILTER (WHERE COALESCE(last_seen_at, collected_at) >= %s AND content_priority_group = 'TERTIARY')::int AS tertiary_candidate_count
         FROM social_news.candidate
         """,
         (window_start, window_start, window_start),
+        timeout_ms=8000,
     )
     recent_category_rows = fetch_all(
         """
@@ -1382,6 +1359,23 @@ def dashboard_summary() -> dict[str, Any]:
         "next_publish_at": cooldown.get("next_publish_at", ""),
         "publish_window_start": window_start,
     }
+
+
+def cached_dashboard_summary(ttl_seconds: int = 15) -> dict[str, Any]:
+    now = time.monotonic()
+    cached = DASHBOARD_SUMMARY_CACHE.get("payload")
+    if isinstance(cached, dict) and float(DASHBOARD_SUMMARY_CACHE.get("expires_at") or 0.0) > now:
+        return cached
+    with DASHBOARD_SUMMARY_LOCK:
+        now = time.monotonic()
+        cached = DASHBOARD_SUMMARY_CACHE.get("payload")
+        if isinstance(cached, dict) and float(DASHBOARD_SUMMARY_CACHE.get("expires_at") or 0.0) > now:
+            return cached
+        payload = dashboard_summary()
+        DASHBOARD_SUMMARY_CACHE["payload"] = payload
+        DASHBOARD_SUMMARY_CACHE["expires_at"] = time.monotonic() + max(1, int(ttl_seconds))
+        return payload
+
 
 def candidate_rows(query: dict[str, list[str]] | None = None) -> dict[str, Any]:
     query = query or {}
@@ -1620,6 +1614,8 @@ def cleanup_candidate_targets(payload: dict[str, Any], selected_ids: list[int], 
             """
             (
                 COALESCE(source_url, '') = ''
+                OR source_url ~ '/path/A'
+                OR canonical_url ~ '/path/A'
                 OR COALESCE(content, '') = ''
                 OR length(COALESCE(content, '')) < 120
                 OR COALESCE(content_fetch_status, '') IN ('FAILED', 'URL_MISSING', 'PARTIAL')
@@ -1641,6 +1637,8 @@ def cleanup_candidate_targets(payload: dict[str, Any], selected_ids: list[int], 
             """
             (
                 COALESCE(source_url, '') = ''
+                OR source_url ~ '/path/A'
+                OR canonical_url ~ '/path/A'
                 OR COALESCE(content, '') = ''
                 OR COALESCE(content_fetch_status, '') IN ('FAILED', 'URL_MISSING')
                 OR COALESCE(evaluation_score, 0) = 0
@@ -1767,6 +1765,18 @@ def cleanup_single_candidate(row: dict[str, Any], force_queue: bool = False, for
     content = str(row.get("content") or "")
     content_status = "URL_MISSING"
     content_error = ""
+    canonical_valid, _ = validate_facebook_article_link(canonical_url)
+    source_valid, _ = validate_facebook_article_link(source_url)
+    if canonical_valid and (not source_valid or "/path/A" in source_url):
+        source_url = canonical_url
+        result["resolved_url"] = 1
+        source_valid = True
+    if source_url and not source_valid:
+        sibling_url = find_existing_article_url(row)
+        if sibling_url:
+            source_url = sibling_url
+            canonical_url = canonical_url or sibling_url
+            result["resolved_url"] = 1
     if source_url:
         try:
             metadata = fetch_article_metadata(source_url, timeout=12)
@@ -1851,7 +1861,8 @@ def find_existing_article_url(row: dict[str, Any]) -> str:
     for candidate in candidates:
         for value in (candidate.get("canonical_url"), candidate.get("source_url")):
             url = safe_url(value or "")
-            if url:
+            valid, _ = validate_facebook_article_link(url)
+            if valid:
                 return url
     return ""
 
@@ -1970,7 +1981,7 @@ def update_cleanup_rows(
                     content_potential_score = COALESCE(%s, content_potential_score),
                     category_selection_reason = COALESCE(NULLIF(%s, ''), category_selection_reason),
                     is_sensitive = COALESCE(%s, is_sensitive),
-                    review_required_reason = COALESCE(NULLIF(%s, ''), review_required_reason),
+                    review_required_reason = COALESCE(%s, review_required_reason),
                     score_threshold = COALESCE(%s, score_threshold),
                     score_breakdown_json = COALESCE(%s, score_breakdown_json),
                     risk_level = COALESCE(NULLIF(%s, ''), risk_level),
@@ -2251,7 +2262,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/admin/facebook/status":
                 self._send_json(facebook_runtime_config_summary())
             elif path == "/api/dashboard/summary":
-                self._send_json(dashboard_summary())
+                self._send_json(cached_dashboard_summary())
             elif path == "/api/admin/content/dashboard":
                 self._send_json(content_dashboard())
             elif path == "/api/admin/content/candidates":
@@ -2670,8 +2681,11 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Set-Cookie", f"{SESSION_COOKIE}={set_cookie}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax")
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            return
 
     def log_message(self, format: str, *args: Any) -> None:
         return
@@ -2691,7 +2705,7 @@ def initialize_admin_runtime() -> None:
     facebook_config = facebook_runtime_config_summary()
     facebook_config_message = (
         f"Facebook runtime config: page_id={facebook_config['page_id'] or '-'}, "
-        f"token_env={facebook_config['page_token_env_key']}, "
+        f"token_source={facebook_config['page_token_source']}, "
         f"page_token={facebook_config['page_token_masked'] or '-'}, "
         f"fingerprint={facebook_config['page_token_fingerprint'] or '-'}, "
         f"user_token_present={facebook_config['user_token_present']}"

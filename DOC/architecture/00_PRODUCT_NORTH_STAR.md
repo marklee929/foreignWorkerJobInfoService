@@ -124,7 +124,7 @@ What happened or what information exists?
 Why does it matter to someone living or working abroad?
 What should the user check or do next?
 Where is the original source?
-````
+```
 
 Content should be clear, calm, practical, and source-aware.
 

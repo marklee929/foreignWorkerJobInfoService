@@ -1,3 +1,26 @@
+# Topic Search and Community Signal Discovery
+
+## Harness Status
+
+Status: future discovery concept requiring source-policy review.
+
+This document is useful for topic discovery strategy, but it must not be treated as approval to scrape communities or collect comments.
+
+Before implementation, define:
+
+- allowed platforms
+- blocked platforms
+- API/terms-of-service constraints
+- login/private-group restrictions
+- PII/anonymization rules
+- raw-comment retention policy
+- whether raw comments can be stored at all
+- how community signals are validated against primary/trusted sources
+
+Community signals may identify user questions and content ideas. They are not authoritative evidence and should not be quoted directly in public posts or guides.
+
+## Strategy Note
+
 ㅇㅇ 네 판단이 맞아. 둘 다 장단점이 확실함.
 
 **초기 MVP는 후자, 나중에 집중 수집은 전자**가 좋아 보여.

@@ -4,6 +4,22 @@
 
 Separate source collection pipelines from the final Facebook publishing pipeline.
 
+## Harness Status
+
+Status: future implementation candidate.
+
+This plan is aligned with the current database architecture direction, but implementation must not be started from a DOC_ONLY session.
+
+The following parts are protected or high-risk:
+
+- changing the final Facebook publish path
+- changing scheduler behavior
+- changing automatic publish selection
+- changing retry/cooldown behavior
+- bulk backfill, archive, or migration of content candidates
+
+Recommended first step is a read-only audit of actual source-to-content sync behavior and publish-log ownership.
+
 ## Target Model
 
 ```text
@@ -120,4 +136,3 @@ Do not remove direct publishing in one large change. First add observability and
 - Add validation status fields or derived API response for UI.
 - Backfill/archive duplicate content candidates after review.
 - Clean existing mojibake labels and error messages.
-

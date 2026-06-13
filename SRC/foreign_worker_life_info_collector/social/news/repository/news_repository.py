@@ -184,15 +184,13 @@ class NewsRepository:
                     SELECT {NEWS_SELECT}
                     FROM social_news.candidate
                     WHERE publish_status IN ('READY_TO_PUBLISH', 'FAILED_RETRYABLE')
-                      AND collected_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+                      AND COALESCE(last_seen_at, collected_at) >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
                       AND COALESCE(post_expired, FALSE) = FALSE
                       AND COALESCE(is_representative, TRUE) = TRUE
                       AND published_at IS NULL
                       AND COALESCE(facebook_post_url, '') = ''
                       AND COALESCE(risk_level, '') != 'HIGH'
-                      AND COALESCE(generated_summary_en, '') !~ '[가-힣]'
-                      AND COALESCE(generated_why_it_matters_en, '') !~ '[가-힣]'
-                    ORDER BY evaluation_score DESC, collected_at DESC, id DESC
+                    ORDER BY evaluation_score DESC, COALESCE(last_seen_at, collected_at) DESC, id DESC
                     LIMIT %s
                     """,
                     (limit,),
@@ -230,13 +228,13 @@ class NewsRepository:
                     f"""
                     SELECT {NEWS_SELECT}
                     FROM social_news.candidate
-                    WHERE collected_at >= %s
+                    WHERE COALESCE(last_seen_at, collected_at) >= %s
                       AND publish_status = 'READY_TO_PUBLISH'
                       AND COALESCE(post_expired, FALSE) = FALSE
                       AND COALESCE(is_representative, TRUE) = TRUE
                       AND published_at IS NULL
                       AND COALESCE(facebook_post_url, '') = ''
-                    ORDER BY evaluation_score DESC, collected_at DESC, id DESC
+                    ORDER BY evaluation_score DESC, COALESCE(last_seen_at, collected_at) DESC, id DESC
                     LIMIT %s
                     """,
                     (cutoff_at, limit),
@@ -360,20 +358,18 @@ class NewsRepository:
                     f"""
                     SELECT {NEWS_SELECT}
                     FROM social_news.candidate
-                    WHERE collected_at >= %s
+                    WHERE COALESCE(last_seen_at, collected_at) >= %s
                       AND COALESCE(post_expired, FALSE) = FALSE
                       AND COALESCE(is_representative, TRUE) = TRUE
                       AND published_at IS NULL
                       AND COALESCE(facebook_post_url, '') = ''
-                      AND COALESCE(generated_summary_en, '') !~ '[가-힣]'
-                      AND COALESCE(generated_why_it_matters_en, '') !~ '[가-힣]'
                       AND NOT (COALESCE(status, '') = ANY(%s))
                       AND NOT (COALESCE(publish_status, '') = ANY(%s))
                       AND (
                           COALESCE(status, '') = ANY(%s)
                           OR COALESCE(publish_status, '') = ANY(%s)
                       )
-                    ORDER BY evaluation_score DESC, collected_at DESC, id DESC
+                    ORDER BY evaluation_score DESC, COALESCE(last_seen_at, collected_at) DESC, id DESC
                     LIMIT %s
                     """,
                     (cutoff_at, list(excluded), list(excluded), list(statuses), list(statuses), limit),

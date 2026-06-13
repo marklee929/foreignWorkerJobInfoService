@@ -31,6 +31,7 @@ from .models import DuplicateCheckResult, NewsCandidate, NewsItem
 from .normalizer.news_normalizer import normalize_news_item
 from .notifier.telegram_notifier import NewsTelegramNotifier
 from .publisher.facebook_publisher import FacebookPublisher
+from ..facebook.token_manager import get_facebook_page_token
 from .repository.news_repository import NewsRepository
 from .summarizer.news_summarizer import NewsSummarizer
 
@@ -295,13 +296,15 @@ class NewsPipeline:
             return self.repository.update_candidate(candidate)
 
         summary = self.summarizer.summarize(candidate)
-        if not dry_run and (not summary.short_summary or summary.risk_notes.startswith("Rule-based summary")):
+        if not dry_run and not summary.short_summary:
             candidate.status = "FAILED_RETRYABLE"
             candidate.publish_status = "FAILED_RETRYABLE"
             candidate.fail_reason = "Local LLaMA 요약 응답 실패 또는 시간 초과로 게시 중단"
             self.repository.insert_pipeline_log("llama_summary", "FAILED_RETRYABLE", candidate.fail_reason, candidate.id)
             self.telegram_notifier.notify_failure(candidate, candidate.fail_reason, dry_run=False)
             return self.repository.update_candidate(candidate)
+        if summary.risk_notes.startswith("Rule-based summary"):
+            self.repository.insert_pipeline_log("llama_summary", "FALLBACK", f"Local LLaMA summary unavailable; rule-based fallback used: {candidate.title}", candidate.id)
 
         candidate.short_summary = summary.short_summary
         candidate.key_points = "\n".join(summary.key_points[:3])
@@ -310,6 +313,7 @@ class NewsPipeline:
         candidate.generated_title = summary.generated_title or candidate.title
         candidate.generated_summary_en = summary.generated_summary_en
         candidate.generated_why_it_matters_en = summary.generated_why_it_matters_en
+        candidate.fail_reason = ""
         candidate.status = "SUMMARIZED"
         candidate.publish_status = "SUMMARIZED"
         candidate = self.repository.update_candidate(candidate)
@@ -471,7 +475,7 @@ class NewsPipeline:
         today_scores = [candidate.evaluation_score for candidate in today_ready if candidate.evaluation_score > 0]
         today_avg_score = round(sum(today_scores) / len(today_scores), 2) if today_scores else 0.0
 
-        recent_pool = [candidate for candidate in today_ready if parse_iso(candidate.collected_at) >= recent_cutoff]
+        recent_pool = [candidate for candidate in today_ready if candidate_seen_at(candidate) >= recent_cutoff]
         recent_ids = {candidate.id for candidate in recent_pool}
         backlog_all = [candidate for candidate in today_ready if candidate.id not in recent_ids]
         backlog_pool = [candidate for candidate in backlog_all if candidate.evaluation_score >= today_avg_score]
@@ -483,7 +487,7 @@ class NewsPipeline:
         fallback_used = False
         fallback_candidates = [
             candidate
-            for candidate in sorted(today_ready, key=lambda item: (item.evaluation_score, parse_iso(item.collected_at)), reverse=True)
+            for candidate in sorted(today_ready, key=lambda item: (item.evaluation_score, candidate_seen_at(item)), reverse=True)
             if candidate.evaluation_score >= minimum_safe_score and candidate.id is not None and candidate.id not in candidate_map
         ]
         current_best_score = max((candidate.evaluation_score for candidate in candidate_map.values()), default=0.0)
@@ -508,7 +512,7 @@ class NewsPipeline:
                 item["final_score"],
                 1 if item["is_recent"] else 0,
                 item["base_score"],
-                parse_iso(item["collected_at"]),
+                parse_iso(item["seen_at"]),
             ),
             reverse=True,
         )
@@ -590,7 +594,7 @@ class NewsPipeline:
         today_all_candidates = [
             candidate
             for candidate in self.repository.list_candidates()
-            if parse_iso(candidate.collected_at) >= window_start or candidate.id in candidate_map
+            if candidate_seen_at(candidate) >= window_start or candidate.id in candidate_map
         ]
         today_unposted_candidates = [
             candidate
@@ -617,7 +621,7 @@ class NewsPipeline:
         no_publish_reason = ""
         promoted_to_ready = False
 
-        recent_pool = [candidate for candidate in prepared_candidates if parse_iso(candidate.collected_at) >= recent_cutoff]
+        recent_pool = [candidate for candidate in prepared_candidates if candidate_seen_at(candidate) >= recent_cutoff]
         recent_ids = {candidate.id for candidate in recent_pool}
         facebook_posts = self.fetch_facebook_engagement_samples()
         selected_score = None
@@ -655,14 +659,18 @@ class NewsPipeline:
         for group in [target] + [item for item in ("PRIMARY", "SECONDARY", "TERTIARY") if item != target]:
             for relaxed in (False, True):
                 threshold = group_threshold(group, relaxed=relaxed)
-                publishable = [item for item in pools[group] if item["base_score"] >= threshold]
+                publishable = [
+                    item
+                    for item in pools[group]
+                    if item["base_score"] >= self.minimum_publish_score() or item["final_score"] >= threshold
+                ]
                 publishable.sort(
                     key=lambda item: (
                         item["final_score"],
                         item["category_rotation_score"],
                         1 if item["is_recent"] else 0,
                         item["base_score"],
-                        parse_iso(item["collected_at"]),
+                        parse_iso(item["seen_at"]),
                     ),
                     reverse=True,
                 )
@@ -679,9 +687,10 @@ class NewsPipeline:
             publishable = [
                 item
                 for item in safe_scored
-                if item["base_score"] >= GROUP_THRESHOLDS.get(item["priority_group"], GROUP_THRESHOLDS["PRIMARY"])["floor"]
+                if item["base_score"] >= self.minimum_publish_score()
+                or item["final_score"] >= GROUP_THRESHOLDS.get(item["priority_group"], GROUP_THRESHOLDS["PRIMARY"])["floor"]
             ]
-            publishable.sort(key=lambda item: (item["final_score"], item["base_score"], parse_iso(item["collected_at"])), reverse=True)
+            publishable.sort(key=lambda item: (item["final_score"], item["base_score"], parse_iso(item["seen_at"])), reverse=True)
             if publishable:
                 selected_score = publishable[0]
                 selected = selected_score["candidate"]
@@ -717,8 +726,11 @@ class NewsPipeline:
                 no_publish_reason = "오늘 수집된 미게시 기사가 없어 게시 후보를 만들 수 없습니다."
             else:
                 no_publish_code = "NO_SAFE_CANDIDATE"
-                best = max(publishable_scores, default=0.0)
-                no_publish_reason = f"오늘 기사 {today_article_count}건을 재평가했지만 최소 안전 점수 40점 이상 후보가 없습니다. 최고 점수: {best:.0f}점"
+                best = max((item["final_score"] for item in safe_scored), default=max(publishable_scores, default=0.0))
+                no_publish_reason = (
+                    f"오늘 기사 {today_article_count}건을 재평가했지만 자동 게시 기준을 통과한 안전 후보가 없습니다. "
+                    f"최고 최종 점수: {best:.0f}점"
+                )
 
         remaining_ready_count = max(0, len([candidate for candidate in prepared_candidates if candidate.publish_status == "READY_TO_PUBLISH"]) - (1 if selected else 0))
         final_top = publishable[:10] if publishable else []
@@ -955,7 +967,7 @@ class NewsPipeline:
             return "High-risk candidate."
         if candidate.is_sensitive:
             return candidate.review_required_reason or "Sensitive article requires manual review."
-        if parse_iso(candidate.collected_at) < self.publish_window_start(now):
+        if candidate_seen_at(candidate) < self.publish_window_start(now):
             return "Candidate is outside the rolling 24-hour publishing window."
         text = f"{candidate.title} {candidate.summary} {candidate.content} {candidate.short_summary} {candidate.relevance_reason}".lower()
         generated_text = f"{candidate.generated_summary_en} {candidate.generated_why_it_matters_en}"
@@ -985,7 +997,7 @@ class NewsPipeline:
         last_category_group: str = "",
     ) -> dict:
         base_score = float(candidate.evaluation_score or 0.0)
-        is_recent = candidate.id in recent_ids or now - parse_iso(candidate.collected_at) <= timedelta(hours=1)
+        is_recent = candidate.id in recent_ids or now - candidate_seen_at(candidate) <= timedelta(hours=1)
         freshness_score = 10.0 if is_recent else 0.0
         backlog_bonus = 0.0 if is_recent else 5.0 if base_score >= today_avg_score else 0.0
         engagement_score = self.engagement_prediction_score(candidate, facebook_posts)
@@ -1009,6 +1021,7 @@ class NewsPipeline:
             "id": candidate.id,
             "title": candidate.title,
             "collected_at": candidate.collected_at,
+            "seen_at": candidate_seen_at(candidate).isoformat(),
             "base_score": round(base_score, 2),
             "freshness_score": round(freshness_score, 2),
             "backlog_above_average_bonus": round(backlog_bonus, 2),
@@ -1058,8 +1071,9 @@ class NewsPipeline:
         }
 
     def fetch_facebook_engagement_samples(self) -> list[dict]:
-        page_id = os.getenv("FACEBOOK_PAGE_ID", "").strip()
-        access_token = os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN", "").strip()
+        token_selection = get_facebook_page_token(allow_refresh=True)
+        page_id = token_selection.page_id or os.getenv("FACEBOOK_PAGE_ID", "").strip()
+        access_token = token_selection.access_token
         client = getattr(self.facebook_publisher, "client", None)
         if not page_id or not access_token or not client or not hasattr(client, "recent_feed"):
             return []
@@ -1561,6 +1575,10 @@ def parse_iso(value: str | None) -> datetime:
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
     except ValueError:
         return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def candidate_seen_at(candidate: NewsCandidate) -> datetime:
+    return parse_iso(candidate.last_seen_at or candidate.collected_at)
 
 
 def collector_search_keywords(default_keyword: str) -> list[tuple[str, str]]:

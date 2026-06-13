@@ -1,6 +1,3 @@
-# 00_DB_ARCHITECTURE_INDEX.md
-
-````md
 # WorkConnect DB Architecture Index
 
 ## 1. Purpose
@@ -29,8 +26,8 @@ The current ERD was exported from DBeaver.
 Recommended path:
 
 ```text
-DOC/database/snapshots/Foreign_Worker_Job_Info_DB.png
-````
+DOC/database/Foreign_Worker_Job_Info_DB.png
+```
 
 Because the full ERD is too large, it should be treated as a physical snapshot, not as an implementation guide.
 
@@ -69,13 +66,11 @@ The `content` schema stores publishable content candidates and external publishi
 | `04_OCCUPATION_CURRENT.md`  | Current Employment24 occupation/job dictionary structure       |
 | `05_ADMIN_OPS_CURRENT.md`   | Current admin, bot, runtime, auth, and operations DB structure |
 
-## 5. Future Documents
+## 5. To-Be Reference
 
 | Document                      | Purpose                                           |
 | ----------------------------- | ------------------------------------------------- |
-| `10_TO_BE_DB_ARCHITECTURE.md` | Target DB architecture principles                 |
-| `11_TO_BE_CONTENT_FLOW.md`    | Target source → content → publish data flow       |
-| `12_MIGRATION_ROADMAP.md`     | Safe migration phases from current DB to to-be DB |
+| `TO_BE_DB_ARCHITECTURE.md`    | Target DB architecture, content flow, and safe migration roadmap |
 
 ## 6. DB Architecture Core Statement
 
@@ -190,8 +185,4 @@ Do not mix:
 * migration plan
 
 in the same section.
-
-````
-
----
 

@@ -87,7 +87,7 @@ class NewsSummarizer:
 
         if payload.get("error"):
             return None
-        text = payload.get("response") or payload.get("text") or ""
+        text = payload.get("response") or payload.get("text") or payload.get("thinking") or ""
         try:
             parsed = json.loads(_extract_json_object(text))
         except Exception:

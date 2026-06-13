@@ -1,6 +1,3 @@
-# 02_SOCIAL_NEWS_CURRENT.md
-
-```md
 # Social News Current DB Reference
 
 ## 1. Purpose
@@ -31,7 +28,7 @@ collector
 → normalized_item
 → candidate
 → duplicate / skipped / ready
-````
+```
 
 If publishing still happens directly from this schema, that path should be treated as legacy or transition-state behavior.
 
@@ -356,7 +353,3 @@ Requires approval:
 * changing status lifecycle
 * changing scheduler behavior
 * changing Facebook publish path
-
-````
-
----

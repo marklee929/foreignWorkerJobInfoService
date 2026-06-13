@@ -1,7 +1,3 @@
-
-# 03_CONTENT_CURRENT.md
-
-```md
 # Content Current DB Reference
 
 ## 1. Purpose
@@ -16,7 +12,7 @@ The core concept is:
 domain/source candidate
 → content.content_candidate
 → content.publish_log
-````
+```
 
 ## 2. Current Role
 
@@ -287,7 +283,3 @@ Requires approval:
 * deleting/archive bulk content
 * mass sync from source tables
 * changing status lifecycle
-
-````
-
----

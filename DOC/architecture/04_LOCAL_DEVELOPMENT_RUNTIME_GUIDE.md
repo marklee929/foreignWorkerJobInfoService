@@ -22,12 +22,13 @@ local PC
 → local automation bots
 → optional local LLaMA/Ollama
 → Facebook / Telegram external APIs
+```
 
 The system may still publish externally even though the web server is local.
 
 Therefore, local development changes can affect real Facebook posting, Telegram notifications, collected data, and admin operations.
 
-Core Rule
+## Core Rule
 
 Development must preserve local runtime stability.
 
@@ -43,7 +44,7 @@ critical status APIs respond
 no protected area was changed unintentionally
 UI is visually checked
 logs do not show new runtime errors
-Local Server Safety
+## Local Server Safety
 
 Before and after code changes, developers or Codex must verify server health.
 

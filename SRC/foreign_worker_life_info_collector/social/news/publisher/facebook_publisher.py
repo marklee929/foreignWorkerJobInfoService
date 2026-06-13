@@ -17,6 +17,7 @@ from ...facebook.error_normalizer import (
     token_status_snapshot,
 )
 from ...facebook.page_client import FacebookPageClient
+from ...facebook.token_manager import get_facebook_page_token
 from ..category_rotation import hashtags_for_group
 from ..collector.google_news_url_resolver import is_acceptable_source_url, is_google_news_url
 from ..models import NewsCandidate
@@ -62,12 +63,13 @@ def token_fingerprint(value: str) -> str:
 
 def facebook_runtime_config_summary() -> dict:
     page_id = os.getenv(FACEBOOK_PAGE_ID_ENV, "").strip()
-    page_token = os.getenv(FACEBOOK_PAGE_ACCESS_TOKEN_ENV, "").strip()
+    selection = get_facebook_page_token(allow_refresh=False)
+    page_token = selection.access_token
     return {
         "page_id": page_id,
         "page_token_masked": mask_token(page_token),
         "page_token_fingerprint": token_fingerprint(page_token),
-        "page_token_env_key": FACEBOOK_PAGE_ACCESS_TOKEN_ENV,
+        "page_token_source": selection.source,
         "user_token_present": bool(os.getenv("FACEBOOK_USER_ACCESS_TOKEN", "").strip()),
     }
 
@@ -151,13 +153,15 @@ class FacebookPublisher:
                 "response_body": "",
             }
 
-        page_id = os.getenv(FACEBOOK_PAGE_ID_ENV, "").strip()
-        access_token = os.getenv(FACEBOOK_PAGE_ACCESS_TOKEN_ENV, "").strip()
+        token_selection = get_facebook_page_token(allow_refresh=True)
+        page_id = token_selection.page_id or os.getenv(FACEBOOK_PAGE_ID_ENV, "").strip()
+        access_token = token_selection.access_token
         app_token = os.getenv(FACEBOOK_APP_TOKEN_ENV, "").strip()
         request_payload.update(
             {
                 "page_id": page_id,
-                "token_env_key": FACEBOOK_PAGE_ACCESS_TOKEN_ENV,
+                "token_source": token_selection.source,
+                "token_config_path": token_selection.config_path,
                 "token_masked": mask_token(access_token),
                 "token_fingerprint": token_fingerprint(access_token),
                 "user_token_present": bool(os.getenv("FACEBOOK_USER_ACCESS_TOKEN", "").strip()),
@@ -176,16 +180,16 @@ class FacebookPublisher:
                 "request_payload": request_payload,
                 "error_code": "MISSING_FACEBOOK_ENV",
                 "error_message": "FACEBOOK_PAGE_ID와 FACEBOOK_PAGE_ACCESS_TOKEN이 필요합니다.",
-                "response_code": "",
-                "response_body": "",
-                "token_debug": {
-                    "token_masked": mask_token(access_token),
-                    "token_fingerprint": token_fingerprint(access_token),
-                    "token_env_key": FACEBOOK_PAGE_ACCESS_TOKEN_ENV,
-                },
-            }, candidate=candidate, link_url=link_decision.url, mode="real")
+                    "response_code": "",
+                    "response_body": "",
+                    "token_debug": {
+                        "token_masked": mask_token(access_token),
+                        "token_fingerprint": token_fingerprint(access_token),
+                        "token_source": token_selection.source,
+                    },
+                }, candidate=candidate, link_url=link_decision.url, mode="real")
         safe_debug = {
-            "token_env_key": FACEBOOK_PAGE_ACCESS_TOKEN_ENV,
+            "token_source": token_selection.source,
             "token_masked": mask_token(access_token),
             "token_fingerprint": token_fingerprint(access_token),
             "token_type": "",

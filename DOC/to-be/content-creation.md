@@ -1,5 +1,32 @@
 ### 타임스탬프 수정내용 ###
 
+## Harness Status
+
+Status: future concept requiring decomposition.
+
+This document mixes several future work streams:
+
+- occupation/reference data enrichment
+- foreign-interest/community topic discovery
+- local LLM analysis
+- PDF/image content generation
+- Facebook publishing
+- admin UI workflow
+- DB schema expansion
+
+Do not implement this as one task.
+
+Before implementation, split it into smaller `CODE_TASK_CANDIDATE` items mapped to:
+
+- `OCCUPATION_DICTIONARY`
+- `LIVING_DOMAIN`
+- `CONTENT_QUEUE`
+- `CONTENT_PUBLISHER`
+- `FACEBOOK_PUBLISHER`
+- `SCHEDULER_BOT_STATE`
+
+Publishing, scheduler, token, and automatic selection changes are protected and require explicit approval.
+
 직업정보 기반 콘텐츠 생성/게시 파이프라인을 설계하고 1차 구현해줘.
 
 목표:

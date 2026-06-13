@@ -1,5 +1,25 @@
 # GPT Connect (Future Architecture)
 
+## Harness Status
+
+Status: future architecture concept.
+
+GPT integration must wait until the data layer has stable source references, trust scoring, content boundaries, and safe answer rules.
+
+Do not implement GPT access as a direct unrestricted database reader.
+
+Future GPT work must first define:
+
+- allowed source domains
+- answerable vs blocked question types
+- source citation requirements
+- privacy and PII handling
+- legal/visa/labor disclaimer rules
+- stale-data handling
+- admin audit logging
+
+Any GPT feature that gives visa, labor, legal, medical, financial, or safety guidance requires conservative review and source-backed answers.
+
 ## 목적
 
 WorkConnect의 데이터를 GPT 기반 대화형 인터페이스로 제공한다.

@@ -1,6 +1,3 @@
-# TO_BE_DB_ARCHITECTURE.md
-
-```md
 # DB To-Be Architecture
 
 ## 1. Purpose
@@ -30,7 +27,7 @@ WorkConnect DB separates:
 
 ```text
 collected source/domain data
-````
+```
 
 from:
 
@@ -300,13 +297,6 @@ These must be answered gradually:
 * Which domain schemas are active vs planned?
 * Should dashboard summary be a view, materialized view, or API aggregation?
 
-````
-
----
-
-# 11_TO_BE_CONTENT_FLOW.md
-
-```md
 # To-Be Content Flow
 
 ## 1. Purpose
@@ -327,7 +317,7 @@ external source
 → domain candidate
 → content.content_candidate
 → content.publish_log
-````
+```
 
 Only `content.content_candidate` can become a public Facebook/social post.
 
@@ -534,13 +524,6 @@ Whenever a new source domain is connected to content, update this document with:
 * eligibility rule
 * publishing risk
 
-````
-
----
-
-# 12_MIGRATION_ROADMAP.md
-
-```md
 # DB Migration Roadmap
 
 ## 1. Purpose
@@ -561,7 +544,7 @@ observable
 reversible when possible
 documented
 tested before publish behavior changes
-````
+```
 
 Do not delete data during early migration.
 

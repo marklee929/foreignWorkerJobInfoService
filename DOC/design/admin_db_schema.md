@@ -1,5 +1,28 @@
 # Admin DB Schema Design
 
+## Harness Status
+
+Status: legacy schema design reference.
+
+This document is retained as a historical design note. The current DB documentation now lives under `DOC/database/`.
+
+Use the following current references before implementing or changing schema behavior:
+
+- `DOC/database/00_DB_ARCHITECTURE_INDEX.md`
+- `DOC/database/01_CURRENT_DB_MAP.md`
+- `DOC/database/02_SOCIAL_NEWS_CURRENT.md`
+- `DOC/database/03_CONTENT_CURRENT.md`
+- `DOC/database/05_ADMIN_OPS_CURRENT.md`
+- `DOC/database/TO_BE_DB_ARCHITECTURE.md`
+
+Known outdated assumptions:
+
+- Some sections describe SQLite-era repository behavior.
+- Some schema plans may already be implemented, renamed, or superseded by later PostgreSQL migrations.
+- Publishing/log ownership must be checked against current `content.publish_log` and `social_news.publish_log` docs before changes.
+
+Do not treat this file as the authoritative DB architecture. Convert implementation ideas into `CODE_TASK_CANDIDATE` entries first.
+
 이 문서는 Vue admin UI를 실제 실행 데이터와 연결하기 전에 필요한 PostgreSQL 테이블 설계를 정리한다.
 
 대상 DB는 로컬 PostgreSQL이며, 기본 database 이름은 `foreign_worker_job_info`이다. database 안에는 `admin`, `social_news` schema를 분리해서 사용한다. 실제 토큰, 비밀번호, `.env`, DB 파일은 저장하지 않는다.

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..social.facebook.page_client import FacebookPageClient
+from ..social.facebook.token_manager import get_facebook_page_token
 from ..social.news.publisher.facebook_publisher import (
     facebook_message_reject_reason,
     mask_token,
@@ -96,6 +98,39 @@ class ContentService:
                 synced += 1
         return {"source": "immigration_info.official_notice", "seen_count": len(rows), "synced_count": synced}
 
+    def publish_next(self, dry_run: bool = False) -> dict[str, Any]:
+        if not dry_run:
+            cooldown = self.publish_cooldown_info()
+            if cooldown["active"]:
+                return {
+                    "ok": True,
+                    "status": "WAITING_COOLDOWN",
+                    "message": f"Content publish cooldown active until {cooldown['next_publish_at']}",
+                    "cooldown": cooldown,
+                }
+        candidates = self.repository.list_candidates({"publishable": "1", "page": 1, "size": 1}).get("items", [])
+        if not candidates:
+            return {"ok": True, "status": "SKIPPED", "message": "No publishable content candidates."}
+        candidate_id = int(candidates[0]["id"])
+        result = self.publish(candidate_id, dry_run=dry_run)
+        return {"ok": result.get("ok", False), "candidate_id": candidate_id, **result}
+
+    def publish_cooldown_info(self) -> dict[str, Any]:
+        cooldown_minutes = max(0, int(os.getenv("NEWS_PUBLISH_COOLDOWN_MINUTES", "30") or "30"))
+        last = self.repository.last_successful_publish_at()
+        if not last or cooldown_minutes <= 0:
+            return {"active": False, "cooldown_minutes": cooldown_minutes, "last_post_at": "", "next_publish_at": "", "remaining_seconds": 0}
+        last_at = last if getattr(last, "tzinfo", None) else last.replace(tzinfo=timezone.utc)
+        next_at = last_at + timedelta(minutes=cooldown_minutes)
+        remaining = max(0, int((next_at - datetime.now(timezone.utc)).total_seconds()))
+        return {
+            "active": remaining > 0,
+            "cooldown_minutes": cooldown_minutes,
+            "last_post_at": last_at.isoformat(),
+            "next_publish_at": next_at.isoformat(),
+            "remaining_seconds": remaining,
+        }
+
     def publish(self, candidate_id: int, dry_run: bool = True) -> dict[str, Any]:
         candidate = self.repository.get_candidate(candidate_id)
         if not candidate:
@@ -130,7 +165,7 @@ class ContentService:
                 "error_message": error_message,
             }
             update = self.repository.update_publish_result(candidate_id, result, dry_run=False)
-            return {**update, **result}
+            return {**result, "facebook_status": result.get("status", ""), **update}
         real_publish_enabled = os.getenv("CONTENT_AUTO_PUBLISH", "").strip().lower() == "true"
         test_mode = os.getenv("CONTENT_PUBLISH_TEST_MODE", "true").strip().lower() != "false"
         dry_run = bool(dry_run or not real_publish_enabled or test_mode)
@@ -147,10 +182,19 @@ class ContentService:
                 "error_message": "",
             }
             update = self.repository.update_publish_result(candidate_id, result, dry_run=True)
-            return {**update, **result}
+            return {**result, "facebook_status": result.get("status", ""), **update}
 
-        page_id = os.getenv("FACEBOOK_PAGE_ID", "").strip()
-        access_token = os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN", "").strip()
+        token_selection = get_facebook_page_token(allow_refresh=True)
+        page_id = token_selection.page_id or os.getenv("FACEBOOK_PAGE_ID", "").strip()
+        access_token = token_selection.access_token
+        request_payload.update(
+            {
+                "page_id": page_id,
+                "token_source": token_selection.source,
+                "token_config_path": token_selection.config_path,
+                "token_fingerprint": token_fingerprint(access_token),
+            }
+        )
         if not page_id or not access_token:
             result = {
                 "ok": False,
@@ -159,15 +203,13 @@ class ContentService:
                 "link_url": link_url,
                 "request_payload": {
                     **request_payload,
-                    "page_id": page_id,
                     "token_masked": mask_token(access_token),
-                    "token_fingerprint": token_fingerprint(access_token),
                 },
                 "error_code": "MISSING_FACEBOOK_ENV",
                 "error_message": "FACEBOOK_PAGE_ID and FACEBOOK_PAGE_ACCESS_TOKEN are required.",
             }
             update = self.repository.update_publish_result(candidate_id, result, dry_run=False)
-            return {**update, **result}
+            return {**result, "facebook_status": result.get("status", ""), **update}
 
         response = FacebookPageClient().publish(message=message, link=link_url, page_id=page_id, access_token=access_token)
         result = {
@@ -183,7 +225,7 @@ class ContentService:
             "response_payload": response,
         }
         update = self.repository.update_publish_result(candidate_id, result, dry_run=False)
-        return {**update, **result}
+        return {**result, "facebook_status": result.get("status", ""), **update}
 
 
 def social_news_payload(row: tuple[Any, ...]) -> dict[str, Any]:

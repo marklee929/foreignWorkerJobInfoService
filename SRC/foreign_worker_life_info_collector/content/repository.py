@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,9 @@ from ..storage.db.postgres import connect
 
 
 MIGRATION_PATH = Path(__file__).resolve().parents[1] / "storage" / "db" / "migrations" / "2026_06_07_content_candidate.sql"
+MIGRATION_LOCK_ID = 52765007
+_SCHEMA_LOCK = threading.Lock()
+_SCHEMA_READY = False
 
 
 class ContentRepository:
@@ -17,10 +21,18 @@ class ContentRepository:
         self.ensure_schema()
 
     def ensure_schema(self) -> None:
-        with connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(MIGRATION_PATH.read_text(encoding="utf-8"))
-            conn.commit()
+        global _SCHEMA_READY
+        if _SCHEMA_READY:
+            return
+        with _SCHEMA_LOCK:
+            if _SCHEMA_READY:
+                return
+            with connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_xact_lock(%s)", (MIGRATION_LOCK_ID,))
+                    cur.execute(MIGRATION_PATH.read_text(encoding="utf-8"))
+                conn.commit()
+            _SCHEMA_READY = True
 
     def dashboard(self) -> dict[str, Any]:
         with connect() as conn:
@@ -166,6 +178,23 @@ class ContentRepository:
         result["publish_logs"] = [publish_log_row(item) for item in logs]
         return result
 
+    def last_successful_publish_at(self):
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT created_at
+                    FROM content.publish_log
+                    WHERE channel = 'facebook'
+                      AND dry_run = FALSE
+                      AND status IN ('PUBLISHED', 'POSTED', 'OK')
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    """
+                )
+                row = cur.fetchone()
+        return row[0] if row else None
+
     def upsert_candidate(self, payload: dict[str, Any]) -> int:
         with connect() as conn:
             with conn.cursor() as cur:
@@ -216,12 +245,26 @@ class ContentRepository:
                         content_potential_score = GREATEST(content.content_candidate.content_potential_score, EXCLUDED.content_potential_score),
                         rotation_score = EXCLUDED.rotation_score,
                         final_publish_score = GREATEST(content.content_candidate.final_publish_score, EXCLUDED.final_publish_score),
-                        sensitive_yn = EXCLUDED.sensitive_yn,
-                        review_required_yn = EXCLUDED.review_required_yn,
-                        review_reason = COALESCE(NULLIF(EXCLUDED.review_reason, ''), content.content_candidate.review_reason),
+                        sensitive_yn = CASE
+                            WHEN content.content_candidate.status = 'READY_TO_REVIEW'
+                                 AND EXCLUDED.status = 'READY_TO_PUBLISH' THEN content.content_candidate.sensitive_yn
+                            ELSE EXCLUDED.sensitive_yn
+                        END,
+                        review_required_yn = CASE
+                            WHEN content.content_candidate.status = 'READY_TO_REVIEW'
+                                 AND EXCLUDED.status = 'READY_TO_PUBLISH' THEN TRUE
+                            ELSE EXCLUDED.review_required_yn
+                        END,
+                        review_reason = CASE
+                            WHEN content.content_candidate.status = 'READY_TO_REVIEW'
+                                 AND EXCLUDED.status = 'READY_TO_PUBLISH' THEN content.content_candidate.review_reason
+                            ELSE COALESCE(NULLIF(EXCLUDED.review_reason, ''), content.content_candidate.review_reason)
+                        END,
                         status = CASE
                             WHEN content.content_candidate.status IN ('POSTED', 'POST_EXPIRED') THEN content.content_candidate.status
                             WHEN content.content_candidate.status = 'ARCHIVED' AND EXCLUDED.status = 'ARCHIVED' THEN 'ARCHIVED'
+                            WHEN content.content_candidate.status = 'READY_TO_REVIEW'
+                                 AND EXCLUDED.status = 'READY_TO_PUBLISH' THEN content.content_candidate.status
                             ELSE EXCLUDED.status
                         END,
                         published_at = COALESCE(EXCLUDED.published_at, content.content_candidate.published_at),
@@ -240,6 +283,9 @@ class ContentRepository:
 
     def update_publish_result(self, candidate_id: int, result: dict[str, Any], dry_run: bool) -> dict[str, Any]:
         status = "POSTED" if result.get("status") in {"OK", "POSTED", "PUBLISHED"} else "FAILED_RETRYABLE"
+        error_code = str(result.get("error_code") or "")
+        if error_code in {"FACEBOOK_LINK_INVALID", "FACEBOOK_MESSAGE_INVALID"}:
+            status = "READY_TO_REVIEW"
         if dry_run:
             status = "READY_TO_PUBLISH"
         error_message = str(result.get("error_message") or result.get("message") or "")
@@ -251,6 +297,8 @@ class ContentRepository:
                     SET status = %s,
                         publish_attempt_count = publish_attempt_count + 1,
                         last_publish_error = %s,
+                        review_required_yn = CASE WHEN %s THEN TRUE ELSE review_required_yn END,
+                        review_reason = CASE WHEN %s THEN %s ELSE review_reason END,
                         published_at = CASE WHEN %s THEN CURRENT_TIMESTAMP ELSE published_at END,
                         facebook_post_id = COALESCE(NULLIF(%s, ''), facebook_post_id),
                         facebook_post_url = COALESCE(NULLIF(%s, ''), facebook_post_url),
@@ -262,6 +310,9 @@ class ContentRepository:
                     (
                         status,
                         "" if status == "POSTED" else error_message,
+                        status == "READY_TO_REVIEW",
+                        status == "READY_TO_REVIEW",
+                        error_message,
                         status == "POSTED",
                         result.get("facebook_post_id", ""),
                         result.get("facebook_post_url", ""),
@@ -279,6 +330,7 @@ class ContentRepository:
                             facebook_post_id = COALESCE(NULLIF(%s, ''), facebook_post_id),
                             facebook_post_url = COALESCE(NULLIF(%s, ''), facebook_post_url),
                             fail_reason = CASE WHEN %s THEN '' ELSE %s END,
+                            review_required_reason = CASE WHEN %s THEN %s ELSE review_required_reason END,
                             updated_at = CURRENT_TIMESTAMP
                         WHERE id = %s
                         """,
@@ -289,6 +341,8 @@ class ContentRepository:
                             result.get("facebook_post_id", ""),
                             result.get("facebook_post_url", ""),
                             status == "POSTED",
+                            error_message,
+                            status == "READY_TO_REVIEW",
                             error_message,
                             int(row[3]),
                         ),
