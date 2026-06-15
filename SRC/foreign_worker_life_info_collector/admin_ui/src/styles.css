@@ -37,6 +37,10 @@
   .status-pill {
     @apply inline-flex items-center rounded-full px-sm py-[2px] text-[10px] font-bold uppercase;
   }
+
+  .btn-secondary {
+    @apply rounded-md border border-outline-variant bg-white px-md py-xs text-body-sm font-bold text-on-surface transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-40;
+  }
 }
 
 @layer utilities {

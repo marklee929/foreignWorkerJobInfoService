@@ -55,6 +55,28 @@ BOT_STATUS_LABELS = {
 }
 BOT_STOP_EVENT = threading.Event()
 BOT_THREAD: threading.Thread | None = None
+LIFESTYLE_BOT_STATUS = {
+    "status": "STOPPED",
+    "message": "생활정보 봇 대기 중",
+    "lastStartedAt": None,
+    "lastStoppedAt": None,
+    "lastErrorAt": None,
+    "lastErrorMessage": None,
+    "lastResult": None,
+}
+LIFESTYLE_BOT_LOCK = threading.Lock()
+LIFESTYLE_BOT_THREAD: threading.Thread | None = None
+IMMIGRATION_BOT_STATUS = {
+    "status": "STOPPED",
+    "message": "출입국 봇 대기 중",
+    "lastStartedAt": None,
+    "lastStoppedAt": None,
+    "lastErrorAt": None,
+    "lastErrorMessage": None,
+    "lastResult": None,
+}
+IMMIGRATION_BOT_LOCK = threading.Lock()
+IMMIGRATION_BOT_THREAD: threading.Thread | None = None
 JOB_COLLECTOR_STATUS = {
     "status": "STOPPED",
     "lastErrorMessage": None,
@@ -430,6 +452,202 @@ def stop_bot() -> dict[str, Any]:
 def reset_bot_error() -> dict[str, Any]:
     BOT_STOP_EVENT.set()
     return set_bot_status("STOPPED")
+
+
+def utc_iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def one_shot_bot_status(state: dict[str, Any], thread: threading.Thread | None, lock: threading.Lock) -> dict[str, Any]:
+    with lock:
+        if thread and thread.is_alive() and state.get("status") not in {"STARTING", "STOPPING"}:
+            state["status"] = "RUNNING"
+        elif (not thread or not thread.is_alive()) and state.get("status") in {"RUNNING", "STARTING", "STOPPING"}:
+            state["status"] = "STOPPED"
+            state["lastStoppedAt"] = state.get("lastStoppedAt") or utc_iso_now()
+        status = state.get("status") or "STOPPED"
+        return {
+            "status": status,
+            "label": BOT_STATUS_LABELS.get(status, status),
+            "message": state.get("message") or "",
+            "lastStartedAt": state.get("lastStartedAt"),
+            "lastStoppedAt": state.get("lastStoppedAt"),
+            "lastErrorAt": state.get("lastErrorAt"),
+            "lastErrorMessage": state.get("lastErrorMessage"),
+            "lastResult": state.get("lastResult"),
+            "dryRun": True,
+        }
+
+
+def set_one_shot_bot_status(
+    state: dict[str, Any],
+    lock: threading.Lock,
+    status: str,
+    message: str = "",
+    result: dict[str, Any] | None = None,
+    error_message: str | None = None,
+) -> dict[str, Any]:
+    now = utc_iso_now()
+    with lock:
+        state["status"] = status
+        if message:
+            state["message"] = message
+        if result is not None:
+            state["lastResult"] = result
+        if status in {"STARTING", "RUNNING"}:
+            state["lastStartedAt"] = now
+            state["lastErrorMessage"] = None
+        elif status == "STOPPED":
+            state["lastStoppedAt"] = now
+            state["lastErrorMessage"] = None
+        elif status == "ERROR":
+            state["lastErrorAt"] = now
+            state["lastErrorMessage"] = (error_message or message or "알 수 없는 오류")[:500]
+        return {
+            "status": state["status"],
+            "label": BOT_STATUS_LABELS.get(state["status"], state["status"]),
+            "message": state.get("message") or "",
+            "lastStartedAt": state.get("lastStartedAt"),
+            "lastStoppedAt": state.get("lastStoppedAt"),
+            "lastErrorAt": state.get("lastErrorAt"),
+            "lastErrorMessage": state.get("lastErrorMessage"),
+            "lastResult": state.get("lastResult"),
+            "dryRun": True,
+        }
+
+
+class SingleKeywordNewsCollector:
+    def __init__(self, delegate: Any):
+        self.delegate = delegate
+
+    def collect(self, keyword: str, limit: int | None = None) -> list[Any]:
+        try:
+            return self.delegate.collect(keyword, limit=limit)
+        except TypeError as exc:
+            if "limit" not in str(exc):
+                raise
+            return self.delegate.collect(keyword)
+
+
+def lifestyle_news_collectors() -> list[Any]:
+    from ..social.news.collector.google_news_collector import GoogleNewsCollector
+    from ..social.news.collector.naver_news_collector import NaverNewsCollector
+
+    return [SingleKeywordNewsCollector(NaverNewsCollector()), SingleKeywordNewsCollector(GoogleNewsCollector())]
+
+
+def lifestyle_bot_status() -> dict[str, Any]:
+    return one_shot_bot_status(LIFESTYLE_BOT_STATUS, LIFESTYLE_BOT_THREAD, LIFESTYLE_BOT_LOCK)
+
+
+def immigration_bot_status() -> dict[str, Any]:
+    return one_shot_bot_status(IMMIGRATION_BOT_STATUS, IMMIGRATION_BOT_THREAD, IMMIGRATION_BOT_LOCK)
+
+
+def run_lifestyle_bot_once() -> None:
+    keywords = [
+        "foreign residents Korea living guide",
+        "foreigners in Korea housing bank healthcare",
+        "Korea cost of living foreigners",
+    ]
+    try:
+        set_one_shot_bot_status(LIFESTYLE_BOT_STATUS, LIFESTYLE_BOT_LOCK, "RUNNING", "생활정보 후보 수집 중")
+        write_bot_log("lifestyle_bot", "STARTED", "생활정보 봇 dry-run 수집 시작")
+        summaries: list[dict[str, Any]] = []
+        max_keywords = max(1, min(int(os.environ.get("LIFESTYLE_BOT_MAX_KEYWORDS", "3") or "3"), len(keywords)))
+        for keyword in keywords[:max_keywords]:
+            result = NewsPipeline(repository=news_repository(), collectors=lifestyle_news_collectors()).run(
+                keyword=keyword,
+                dry_run=True,
+                limit=1,
+            )
+            summaries.append(
+                {
+                    "keyword": keyword,
+                    "collected_count": result.get("collected_count", 0),
+                    "saved_count": result.get("saved_count", 0),
+                    "processed_count": result.get("processed_count", 0),
+                    "selected_count": result.get("selected_count", 0),
+                }
+            )
+        total_saved = sum(int(item.get("saved_count") or 0) for item in summaries)
+        result_payload = {"keywords": summaries, "saved_count": total_saved}
+        write_bot_log("lifestyle_bot", "COMPLETED", f"생활정보 봇 dry-run 수집 완료: 저장 {total_saved}건")
+        set_one_shot_bot_status(
+            LIFESTYLE_BOT_STATUS,
+            LIFESTYLE_BOT_LOCK,
+            "STOPPED",
+            f"생활정보 후보 수집 완료: 저장 {total_saved}건",
+            result=result_payload,
+        )
+    except Exception as exc:
+        message = str(exc)[:500]
+        write_bot_log("lifestyle_bot", "FAILED", f"생활정보 봇 수집 실패: {message[:180]}")
+        set_one_shot_bot_status(LIFESTYLE_BOT_STATUS, LIFESTYLE_BOT_LOCK, "ERROR", "생활정보 봇 수집 실패", error_message=message)
+
+
+def start_lifestyle_bot() -> dict[str, Any]:
+    global LIFESTYLE_BOT_THREAD
+    if LIFESTYLE_BOT_THREAD and LIFESTYLE_BOT_THREAD.is_alive():
+        return lifestyle_bot_status()
+    set_one_shot_bot_status(LIFESTYLE_BOT_STATUS, LIFESTYLE_BOT_LOCK, "STARTING", "생활정보 봇 시작 요청")
+    LIFESTYLE_BOT_THREAD = threading.Thread(target=run_lifestyle_bot_once, name="workconnect-lifestyle-bot", daemon=True)
+    LIFESTYLE_BOT_THREAD.start()
+    return lifestyle_bot_status()
+
+
+def stop_lifestyle_bot() -> dict[str, Any]:
+    if LIFESTYLE_BOT_THREAD and LIFESTYLE_BOT_THREAD.is_alive():
+        return set_one_shot_bot_status(
+            LIFESTYLE_BOT_STATUS,
+            LIFESTYLE_BOT_LOCK,
+            "STOPPING",
+            "현재 수집 사이클 완료 후 중지됩니다.",
+        )
+    return set_one_shot_bot_status(LIFESTYLE_BOT_STATUS, LIFESTYLE_BOT_LOCK, "STOPPED", "생활정보 봇 중지됨")
+
+
+def run_immigration_bot_once() -> None:
+    try:
+        set_one_shot_bot_status(IMMIGRATION_BOT_STATUS, IMMIGRATION_BOT_LOCK, "RUNNING", "출입국 공식 공지 수집 중")
+        result = immigration_service().collect(source="", limit=20)
+        inserted = int(result.get("inserted_count") or 0)
+        updated = int(result.get("updated_count") or 0)
+        failed = int(result.get("failed_count") or 0)
+        status = "ERROR" if failed and not (inserted or updated) else "STOPPED"
+        message = f"출입국 수집 완료: 신규 {inserted}건, 갱신 {updated}건, 실패 {failed}건"
+        set_one_shot_bot_status(
+            IMMIGRATION_BOT_STATUS,
+            IMMIGRATION_BOT_LOCK,
+            status,
+            message,
+            result=result,
+            error_message=result.get("message") if status == "ERROR" else None,
+        )
+    except Exception as exc:
+        message = str(exc)[:500]
+        set_one_shot_bot_status(IMMIGRATION_BOT_STATUS, IMMIGRATION_BOT_LOCK, "ERROR", "출입국 봇 수집 실패", error_message=message)
+
+
+def start_immigration_bot() -> dict[str, Any]:
+    global IMMIGRATION_BOT_THREAD
+    if IMMIGRATION_BOT_THREAD and IMMIGRATION_BOT_THREAD.is_alive():
+        return immigration_bot_status()
+    set_one_shot_bot_status(IMMIGRATION_BOT_STATUS, IMMIGRATION_BOT_LOCK, "STARTING", "출입국 봇 시작 요청")
+    IMMIGRATION_BOT_THREAD = threading.Thread(target=run_immigration_bot_once, name="workconnect-immigration-bot", daemon=True)
+    IMMIGRATION_BOT_THREAD.start()
+    return immigration_bot_status()
+
+
+def stop_immigration_bot() -> dict[str, Any]:
+    if IMMIGRATION_BOT_THREAD and IMMIGRATION_BOT_THREAD.is_alive():
+        return set_one_shot_bot_status(
+            IMMIGRATION_BOT_STATUS,
+            IMMIGRATION_BOT_LOCK,
+            "STOPPING",
+            "현재 수집 사이클 완료 후 중지됩니다.",
+        )
+    return set_one_shot_bot_status(IMMIGRATION_BOT_STATUS, IMMIGRATION_BOT_LOCK, "STOPPED", "출입국 봇 중지됨")
 
 
 def job_collector_settings() -> dict[str, Any]:
@@ -1243,82 +1461,106 @@ def dashboard_summary() -> dict[str, Any]:
     candidate_counts = fetch_one_with_timeout(
         """
         SELECT
-            COUNT(*)::int AS candidate_count,
-            COUNT(*) FILTER (
+            (SELECT COUNT(id)::int FROM social_news.candidate) AS candidate_count,
+            (
+                SELECT COUNT(*)::int
+                FROM social_news.candidate
                 WHERE publish_status = 'READY_TO_PUBLISH'
                   AND COALESCE(last_seen_at, collected_at) >= %s
                   AND COALESCE(post_expired, FALSE) = FALSE
                   AND COALESCE(is_representative, TRUE) = TRUE
+                  AND COALESCE(is_sensitive, FALSE) = FALSE
                   AND published_at IS NULL
                   AND COALESCE(facebook_post_url, '') = ''
                   AND COALESCE(risk_level, '') != 'HIGH'
-            )::int AS today_ready_count,
-            COUNT(*) FILTER (
+            ) AS today_ready_count,
+            (
+                SELECT COUNT(*)::int
+                FROM social_news.candidate
                 WHERE COALESCE(last_seen_at, collected_at) < %s
                   AND publish_status = 'POST_EXPIRED'
-            )::int AS previous_post_expired_count,
-            COUNT(*) FILTER (
+            ) AS previous_post_expired_count,
+            (
+                SELECT COUNT(*)::int
+                FROM social_news.candidate
                 WHERE publish_status IN ('POSTED', 'PUBLISHED', 'DRY_RUN_PUBLISHED', 'NOTIFIED', 'DRY_RUN_NOTIFIED')
                    OR status IN ('POSTED', 'PUBLISHED', 'DRY_RUN_PUBLISHED', 'NOTIFIED', 'DRY_RUN_NOTIFIED')
-            )::int AS published_count,
-            COUNT(*) FILTER (
+            ) AS published_count,
+            (
+                SELECT COUNT(*)::int
+                FROM social_news.candidate
                 WHERE COALESCE(post_expired, FALSE) = TRUE
                    OR publish_status = 'POST_EXPIRED'
-            )::int AS post_expired_count,
-            COUNT(*) FILTER (WHERE status = 'DUPLICATE')::int AS duplicate_count,
-            COUNT(*) FILTER (WHERE status = 'FAILED' OR publish_status IN ('FAILED', 'FAILED_RETRYABLE', 'FAILED_REPOST_REQUIRED', 'FAILED_PERMISSION'))::int AS failed_count
-        FROM social_news.candidate
-        """,
-        (window_start, window_start),
-        timeout_ms=8000,
-    )
-    publish_metrics = fetch_one_with_timeout(
-        """
-        SELECT
-            COUNT(*) FILTER (WHERE COALESCE(last_seen_at, collected_at) >= %s)::int AS today_article_count,
-            COUNT(*) FILTER (
+            ) AS post_expired_count,
+            (SELECT COUNT(*)::int FROM social_news.candidate WHERE status = 'DUPLICATE') AS duplicate_count,
+            (
+                SELECT COUNT(*)::int
+                FROM social_news.candidate
+                WHERE status = 'FAILED'
+                   OR publish_status IN ('FAILED', 'FAILED_RETRYABLE', 'FAILED_REPOST_REQUIRED', 'FAILED_PERMISSION')
+            ) AS failed_count,
+            (SELECT COUNT(*)::int FROM social_news.candidate WHERE COALESCE(last_seen_at, collected_at) >= %s) AS today_article_count,
+            (
+                SELECT COUNT(*)::int
+                FROM social_news.candidate
                 WHERE COALESCE(last_seen_at, collected_at) >= %s
                   AND COALESCE(post_expired, FALSE) = FALSE
                   AND published_at IS NULL
                   AND COALESCE(facebook_post_url, '') = ''
-                  AND COALESCE(publish_status, '') NOT IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'POST_EXPIRED', 'ARCHIVED', 'AUTO_RETRY_BLOCKED')
-            )::int AS today_unposted_count,
-            ROUND(AVG(evaluation_score) FILTER (WHERE COALESCE(last_seen_at, collected_at) >= %s AND evaluation_score > 0), 2) AS avg_score,
-            COUNT(*) FILTER (
+                  AND COALESCE(publish_status, '') NOT IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'POST_EXPIRED', 'ARCHIVED', 'AUTO_RETRY_BLOCKED', 'SKIPPED', 'DUPLICATE', 'DUPLICATE_SKIPPED')
+                  AND COALESCE(status, '') NOT IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'POST_EXPIRED', 'ARCHIVED', 'AUTO_RETRY_BLOCKED', 'SKIPPED', 'DUPLICATE', 'DUPLICATE_SKIPPED')
+            ) AS today_unposted_count,
+            (
+                SELECT ROUND(AVG(evaluation_score) FILTER (WHERE evaluation_score > 0), 2)
+                FROM social_news.candidate
+                WHERE COALESCE(last_seen_at, collected_at) >= %s
+            ) AS avg_score,
+            (
+                SELECT COUNT(*)::int
+                FROM social_news.candidate
                 WHERE publish_status = 'READY_TO_PUBLISH'
                   AND COALESCE(post_expired, FALSE) = FALSE
                   AND COALESCE(is_representative, TRUE) = TRUE
+                  AND COALESCE(is_sensitive, FALSE) = FALSE
                   AND published_at IS NULL
                   AND COALESCE(facebook_post_url, '') = ''
                   AND COALESCE(risk_level, '') != 'HIGH'
-            )::int AS ready_count,
-            COUNT(*) FILTER (
+            ) AS ready_count,
+            (
+                SELECT COUNT(*)::int
+                FROM social_news.candidate
                 WHERE COALESCE(last_seen_at, collected_at) >= %s
                   AND publish_status = 'FAILED_RETRYABLE'
                   AND COALESCE(post_expired, FALSE) = FALSE
                   AND published_at IS NULL
-            )::int AS retryable_count,
-            COUNT(*) FILTER (
-                WHERE COALESCE(last_seen_at, collected_at) >= %s
+            ) AS retryable_count,
+            (
+                SELECT COUNT(*)::int
+                FROM social_news.candidate
+                WHERE published_at >= %s
                   AND publish_status IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED')
-            )::int AS posted_today_count
-        FROM social_news.candidate
+            ) AS posted_today_count,
+            (SELECT COUNT(*)::int FROM social_news.candidate WHERE COALESCE(last_seen_at, collected_at) >= %s AND content_priority_group = 'PRIMARY') AS primary_candidate_count,
+            (SELECT COUNT(*)::int FROM social_news.candidate WHERE COALESCE(last_seen_at, collected_at) >= %s AND content_priority_group = 'SECONDARY') AS secondary_candidate_count,
+            (SELECT COUNT(*)::int FROM social_news.candidate WHERE COALESCE(last_seen_at, collected_at) >= %s AND content_priority_group = 'TERTIARY') AS tertiary_candidate_count
         """,
-        (window_start, window_start, window_start, window_start, window_start),
-        timeout_ms=8000,
+        (
+            window_start,
+            window_start,
+            window_start,
+            window_start,
+            window_start,
+            window_start,
+            window_start,
+            window_start,
+            window_start,
+            window_start,
+        ),
+        timeout_ms=20000,
     )
+    publish_metrics: dict[str, Any] = {}
     cooldown = pipeline.publish_cooldown_info()
-    category_metrics = fetch_one_with_timeout(
-        """
-        SELECT
-            COUNT(*) FILTER (WHERE COALESCE(last_seen_at, collected_at) >= %s AND content_priority_group = 'PRIMARY')::int AS primary_candidate_count,
-            COUNT(*) FILTER (WHERE COALESCE(last_seen_at, collected_at) >= %s AND content_priority_group = 'SECONDARY')::int AS secondary_candidate_count,
-            COUNT(*) FILTER (WHERE COALESCE(last_seen_at, collected_at) >= %s AND content_priority_group = 'TERTIARY')::int AS tertiary_candidate_count
-        FROM social_news.candidate
-        """,
-        (window_start, window_start, window_start),
-        timeout_ms=8000,
-    )
+    category_metrics: dict[str, Any] = {}
     recent_category_rows = fetch_all(
         """
         SELECT COALESCE(content_priority_group, 'PRIMARY') AS content_priority_group, COUNT(*)::int AS published_count
@@ -1448,6 +1690,14 @@ def candidate_rows(query: dict[str, list[str]] | None = None) -> dict[str, Any]:
     return {"items": [sanitize_news_url_fields(row) for row in rows], "total_count": total, "page": page, "size": size}
 
 
+def lifestyle_candidate_rows(query: dict[str, list[str]] | None = None) -> dict[str, Any]:
+    query = {key: list(value) for key, value in (query or {}).items()}
+    query.setdefault("includeDuplicates", ["false"])
+    if not str(query.get("content_category", [""])[0]).strip():
+        query["priority_group"] = ["SECONDARY"]
+    return candidate_rows(query)
+
+
 def candidate_detail(candidate_id: int) -> dict[str, Any]:
     candidate = fetch_one(
         """
@@ -1482,7 +1732,7 @@ def candidate_detail(candidate_id: int) -> dict[str, Any]:
         group_items = fetch_all(
             """
             SELECT id, title, source_name, source_type, source_url, canonical_url, google_news_url,
-                   status, publish_status, evaluation_score, collected_at, facebook_post_url,
+                   status, publish_status, evaluation_score, collected_at, last_seen_at, facebook_post_url,
                    is_representative, duplicate_count, related_source_count
                    , representative_candidate_id, content_fetch_status
             FROM social_news.candidate
@@ -1555,6 +1805,10 @@ def candidate_detail(candidate_id: int) -> dict[str, Any]:
     }
 
 
+def lifestyle_candidate_detail(candidate_id: int) -> dict[str, Any]:
+    return candidate_detail(candidate_id)
+
+
 def delete_candidate_rows(ids: list[int]) -> int:
     deleted = news_repository().delete_candidates(ids)
     write_bot_log("candidate_delete", "COMPLETED", f"후보 기사 {deleted}건 삭제")
@@ -1582,6 +1836,7 @@ def cleanup_candidate_article_data(payload: dict[str, Any]) -> dict[str, Any]:
         "skipped": 0,
         "retryable_reset": retryable_reset,
     }
+
     touched_ids: list[int] = []
     force_queue = bool(selected_ids)
     for row in rows:
@@ -2276,6 +2531,18 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(detail if detail else {"error": "not_found", "message": "content candidate not found"}, status=200 if detail else 404)
             elif path == "/api/social/news/candidates":
                 self._send_json(candidate_rows(query))
+            elif path == "/api/admin/lifestyle/candidates":
+                self._send_json(lifestyle_candidate_rows(query))
+            elif path.startswith("/api/admin/lifestyle/candidates/"):
+                raw_id = path.rsplit("/", 1)[-1]
+                if not raw_id.isdigit():
+                    self._send_json({"error": "bad_request", "message": "생활정보 후보 ID가 올바르지 않습니다."}, status=400)
+                    return
+                detail = lifestyle_candidate_detail(int(raw_id))
+                if not detail:
+                    self._send_json({"error": "not_found", "message": "생활정보 상세 데이터를 찾을 수 없습니다."}, status=404)
+                    return
+                self._send_json(detail)
             elif path.startswith("/api/social/news/candidates/"):
                 raw_id = path.rsplit("/", 1)[-1]
                 if not raw_id.isdigit():
@@ -2292,6 +2559,10 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"items": log_rows(limit=limit, offset=offset)})
             elif path == "/api/admin/bot/status":
                 self._send_json(format_bot_status(bot_runtime_row()))
+            elif path == "/api/admin/lifestyle-bot/status":
+                self._send_json(lifestyle_bot_status())
+            elif path == "/api/admin/immigration-bot/status":
+                self._send_json(immigration_bot_status())
             elif path == "/api/admin/llama/status":
                 self._send_json(ensure_llama(start_command=False))
             elif path == "/api/admin/job-collector/status":
@@ -2363,6 +2634,14 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(stop_bot())
             elif path == "/api/admin/bot/reset-error":
                 self._send_json(reset_bot_error())
+            elif path == "/api/admin/lifestyle-bot/start":
+                self._send_json(start_lifestyle_bot())
+            elif path == "/api/admin/lifestyle-bot/stop":
+                self._send_json(stop_lifestyle_bot())
+            elif path == "/api/admin/immigration-bot/start":
+                self._send_json(start_immigration_bot())
+            elif path == "/api/admin/immigration-bot/stop":
+                self._send_json(stop_immigration_bot())
             elif path == "/api/admin/llama/reconnect":
                 self._send_json(ensure_llama(start_command=True, user_requested=True))
             elif path == "/api/admin/llama/start":

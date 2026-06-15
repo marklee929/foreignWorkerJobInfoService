@@ -1,0 +1,109 @@
+erDiagram
+    SOURCE_ITEM ||--o{ GENERATED_CONTENT : creates
+    GENERATED_CONTENT ||--o{ REVIEW_LOG : records
+    GENERATED_CONTENT ||--o{ PUBLISH_TARGET : targets
+
+    SOURCE_ITEM {
+        bigint id PK
+        varchar source_domain
+        varchar source_platform
+        varchar source_name
+        text source_url
+        text canonical_url
+        text publishable_link_url
+        text title
+        text body_text
+        text summary_text
+        varchar language
+        varchar country_code
+        varchar category
+        varchar subcategory
+        timestamptz collected_at
+        timestamptz last_seen_at
+        timestamptz source_published_at
+        jsonb raw_payload
+        varchar source_risk_level
+        varchar access_restriction
+        varchar copyright_risk_level
+        boolean pii_checked_yn
+        boolean usable_for_content_yn
+    }
+
+    GENERATED_CONTENT {
+        bigint id PK
+        bigint source_item_id FK
+        varchar content_type
+        varchar category
+        varchar subcategory
+        varchar target_persona
+        varchar language
+        text title
+        text written_content
+        text short_summary
+        text why_it_matters
+        text check_next
+        text hashtags
+        text image_url
+        text image_prompt
+        text source_disclaimer
+        boolean translation_yn
+        varchar translated_from
+        text original_link
+        timestamptz generated_at
+        varchar generation_model
+        numeric quality_score
+        numeric risk_score
+        varchar status
+        text status_reason
+        bigint telegram_message_id
+        varchar reviewer_id
+        varchar reviewer_name
+        timestamptz approved_at
+        timestamptz rejected_at
+        timestamptz published_at
+    }
+
+    REVIEW_LOG {
+        bigint id PK
+        bigint generated_content_id FK
+        varchar review_channel
+        bigint telegram_message_id
+        varchar reviewer_id
+        varchar reviewer_name
+        varchar action
+        text comment
+        timestamptz reviewed_at
+    }
+
+    PUBLISH_TARGET {
+        bigint id PK
+        bigint generated_content_id FK
+        varchar target_channel
+        varchar publish_status
+        text published_url
+        varchar external_post_id
+        timestamptz published_at
+        varchar error_category
+        text error_message
+        jsonb request_payload
+        jsonb response_payload
+    }
+
+    COMMUNITY_SIGNAL {
+        bigint id PK
+        varchar source_platform
+        text source_url
+        varchar topic
+        varchar language
+        varchar country
+        varchar category
+        text question_pattern
+        numeric frequency_score
+        numeric urgency_score
+        int sample_count
+        varchar author_hash
+        varchar raw_retention_policy
+        boolean pii_checked_yn
+        boolean usable_for_content_yn
+        varchar terms_risk_level
+    }

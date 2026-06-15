@@ -181,6 +181,19 @@ RELIABLE_SOURCE_HINTS = (
     "joongang",
     "bal immigration",
 )
+PAYWALL_TERMS = (
+    "log in to read more",
+    "login to read more",
+    "sign in to read more",
+    "subscribe to read",
+    "subscription required",
+    "exclusive insights, and subscription services",
+    "sign in to explore a world of free content",
+    "register to continue reading",
+    "please log in",
+    "please login",
+    "members only",
+)
 
 
 class CandidateEvaluator:
@@ -373,6 +386,8 @@ class CandidateEvaluator:
             penalty += 35
         if any(term in text for term in NEGATIVE_INCIDENT_TERMS):
             penalty += 55
+        if self._has_login_wall(candidate, text):
+            penalty += 45
         if not candidate.source_url:
             penalty += 25
         if has_korean_text(candidate.generated_summary_en, max_hangul_chars=6) or has_korean_text(candidate.generated_why_it_matters_en, max_hangul_chars=6):
@@ -392,6 +407,8 @@ class CandidateEvaluator:
             return "Title is missing."
         if candidate.is_sensitive:
             return candidate.review_required_reason or "Sensitive article requires manual review."
+        if self._has_login_wall(candidate, text):
+            return "Article body is blocked by a login or subscription wall."
         if has_korean_text(candidate.generated_summary_en, max_hangul_chars=6) or has_korean_text(candidate.generated_why_it_matters_en, max_hangul_chars=6):
             return "Generated Facebook summary contains Korean text; English-only posts are required."
         if any(term in text for term in NEGATIVE_INCIDENT_TERMS):
@@ -411,6 +428,27 @@ class CandidateEvaluator:
             return "Advertising or spam-like text is present."
         return ""
 
+    def _has_login_wall(self, candidate: NewsCandidate, text: str = "") -> bool:
+        combined = " ".join(
+            [
+                text,
+                candidate.content or "",
+                candidate.summary or "",
+                candidate.short_summary or "",
+                candidate.generated_summary_en or "",
+                candidate.generated_why_it_matters_en or "",
+            ]
+        ).lower()
+        if any(term in combined for term in PAYWALL_TERMS):
+            return True
+        content_text = (candidate.content or "").strip()
+        summary_text = " ".join([candidate.summary or "", candidate.short_summary or ""]).strip()
+        if len(content_text) < 500 and any(term in combined for term in ("login", "log in", "sign in", "subscription")):
+            return True
+        if len(content_text) < 350 and len(summary_text) < 220 and any(term in combined for term in ("read more", "continue reading")):
+            return True
+        return False
+
     def _freshness_score(self, candidate: NewsCandidate) -> float:
         age_hours = self._candidate_age_hours(candidate)
         if age_hours <= 6:
@@ -424,14 +462,15 @@ class CandidateEvaluator:
         return -25.0
 
     def _candidate_age_hours(self, candidate: NewsCandidate) -> float:
-        if not candidate.collected_at:
+        seen_at_value = candidate.last_seen_at or candidate.collected_at
+        if not seen_at_value:
             return 9999.0
         try:
-            value = candidate.collected_at.replace("Z", "+00:00")
-            collected_at = datetime.fromisoformat(value)
-            if collected_at.tzinfo is None:
-                collected_at = collected_at.replace(tzinfo=timezone.utc)
-            return max(0.0, (datetime.now(timezone.utc) - collected_at.astimezone(timezone.utc)).total_seconds() / 3600)
+            value = seen_at_value.replace("Z", "+00:00")
+            seen_at = datetime.fromisoformat(value)
+            if seen_at.tzinfo is None:
+                seen_at = seen_at.replace(tzinfo=timezone.utc)
+            return max(0.0, (datetime.now(timezone.utc) - seen_at.astimezone(timezone.utc)).total_seconds() / 3600)
         except Exception:
             return 9999.0
 

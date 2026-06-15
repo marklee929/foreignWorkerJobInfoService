@@ -492,3 +492,13 @@ verification cannot be performed
 fixing requires guessing
 
 A stopped task with a clear report is better than a completed task that breaks the local operations environment.
+
+## Related Documents
+
+- `DOC/flowchart/flowchart-flow-audit.md`
+  - See the “Recommended Corrections” section for the publishing boundary rules:
+    - source schemas collect and classify
+    - `content.content_candidate` owns final message, final link, validation state, approval state, and publish state
+    - Facebook publisher should read only final content candidates
+    - final publish validation must run before Facebook publishing
+    - blocked states must be separated from failed states

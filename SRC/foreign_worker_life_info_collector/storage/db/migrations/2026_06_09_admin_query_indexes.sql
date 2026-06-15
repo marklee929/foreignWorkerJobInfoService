@@ -10,6 +10,13 @@ ON social_news.candidate(publish_cycle_id);
 CREATE INDEX IF NOT EXISTS idx_social_news_candidate_collected_at
 ON social_news.candidate(collected_at DESC, id DESC);
 
+CREATE INDEX IF NOT EXISTS idx_social_news_candidate_last_seen_at
+ON social_news.candidate(COALESCE(last_seen_at, collected_at) DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_social_news_candidate_published_at
+ON social_news.candidate(published_at DESC, id DESC)
+WHERE published_at IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_social_news_candidate_duplicate_group_id
 ON social_news.candidate(duplicate_group_id);
 
@@ -30,4 +37,3 @@ ON content.content_candidate(raw_ref_table, raw_ref_id);
 
 CREATE INDEX IF NOT EXISTS idx_social_news_pipeline_step_log_created_at
 ON social_news.pipeline_step_log(created_at DESC, id DESC);
-

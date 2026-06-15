@@ -43,22 +43,35 @@ function formatScore(value) {
 
 function statusLabel(status) {
   const map = {
-    READY_TO_PUBLISH: '게시 대기',
-    POSTED: '게시 완료',
-    PUBLISHED: '게시 완료',
-    FAILED_PERMISSION: '권한 확인 필요',
-    FAILED_REPOST_REQUIRED: '재게시 필요',
-    FAILED_RETRYABLE: '재시도 대기',
-    DUPLICATE: '중복 제외',
+    RAW: '원본',
+    CANDIDATE: '후보',
+    COLLECTED: '수집',
     NORMALIZED: '정규화',
-    SUMMARIZED: '요약 완료',
-    SCORED: '점수 평가',
+    SUMMARIZED: '요약완료',
+    SCORED: '점수평가',
+    READY_TO_PUBLISH: '게시대기',
+    READY_TO_REVIEW: '검토대기',
+    REVIEW_REQUIRED: '검토필요',
+    AUTO_RETRY_BLOCKED: '재시막힘',
+    FAILED_REPOST_REQUIRED: '재게시',
+    FAILED_PERMISSION: '권한확인',
+    FAILED_RETRYABLE: '재시도',
+    FAILED: '실패',
+    PUBLISHED: '게시완료',
+    DRY_RUN_PUBLISHED: '테스트',
+    NOTIFIED: '알림완료',
+    DRY_RUN_NOTIFIED: '테스트',
+    DUPLICATE: '중복제외',
+    DUPLICATE_SKIPPED: '중복제외',
+    TEXT_INVALID: '본문오류',
     SKIPPED: '제외',
-    TEXT_INVALID: '본문 부적합',
-    POST_EXPIRED: '게시 만료',
-    AUTO_RETRY_BLOCKED: '자동 재시도 차단',
+    SKIPPED_LOW_SCORE: '점수미달',
+    POSTED: '게시완료',
+    POST_EXPIRED: '게시만료',
+    SKIPPED_DAILY_RESET: '일일만료',
+    ARCHIVED: '보관',
   }
-  return map[status] || status || '-'
+  return map[status] || (status ? '기타상태' : '-')
 }
 
 function parseJson(value) {
@@ -92,7 +105,7 @@ async function handleCleanupLinks() {
     const result = await cleanupCandidateLinks({
       ids: [candidate.value.id],
       limit: 1,
-      forceResummarize: true,
+      forceResummarize: false,
     })
     actionMessage.value = `링크/본문 정리 완료: URL ${result.resolved_url || 0}건, 본문 ${result.content_updated || 0}건, 요약 ${result.summary_updated || 0}건, 점수 ${result.score_updated || 0}건, 대기열 ${result.queue_updated || 0}건, 실패 ${result.failed || 0}건`
     await loadDetail()
@@ -162,7 +175,8 @@ onMounted(loadDetail)
               <span class="rounded bg-surface-container px-sm py-[2px] font-bold">{{ statusLabel(candidate.publish_status || candidate.status) }}</span>
               <span class="font-mono text-success">점수 {{ formatScore(candidate.evaluation_score) }}</span>
               <span class="text-on-surface-variant">{{ candidate.publisher_name || candidate.source_name || candidate.source_type || '-' }}</span>
-              <span class="text-on-surface-variant">{{ formatDate(candidate.collected_at) }}</span>
+              <span class="text-on-surface-variant">최종 수집 {{ formatDate(candidate.last_seen_at || candidate.collected_at) }}</span>
+              <span class="text-on-surface-variant">최초 수집 {{ formatDate(candidate.collected_at) }}</span>
             </div>
             <h1 class="max-w-[1080px] text-display font-black">{{ candidate.title || '제목 없음' }}</h1>
             <div class="grid gap-xs text-body-sm">
@@ -211,7 +225,8 @@ onMounted(loadDetail)
                   <span v-if="item.is_representative" class="rounded bg-primary-container px-sm py-[2px] font-bold text-primary">대표</span>
                   <span class="rounded bg-surface-container px-sm py-[2px] font-bold">{{ statusLabel(item.publish_status || item.status) }}</span>
                   <span class="font-mono text-success">{{ formatScore(item.evaluation_score) }}</span>
-                  <span class="text-on-surface-variant">{{ formatDate(item.collected_at) }}</span>
+                  <span class="text-on-surface-variant">최종 {{ formatDate(item.last_seen_at || item.collected_at) }}</span>
+                  <span class="text-on-surface-variant">최초 {{ formatDate(item.collected_at) }}</span>
                 </div>
                 <p class="font-bold">{{ item.title }}</p>
                 <div class="mt-xs flex flex-wrap gap-sm text-on-surface-variant">

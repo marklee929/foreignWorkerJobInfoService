@@ -1,10 +1,12 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import AuthGate from '../views/AuthGate.vue'
+import ContentApprovalWorkflowPage from '../views/ContentApprovalWorkflowPage.vue'
 import ContentManagementPage from '../views/ContentManagementPage.vue'
 import Dashboard from '../views/Dashboard.vue'
 import EmploymentJobPage from '../views/EmploymentJobPage.vue'
 import ImmigrationNoticePage from '../views/ImmigrationNoticePage.vue'
 import JobCollectorPage from '../views/JobCollectorPage.vue'
+import LifestyleInfoPage from '../views/LifestyleInfoPage.vue'
 import NewsDetail from '../views/NewsDetail.vue'
 import SectionPage from '../views/SectionPage.vue'
 import { checkAdminAuth } from '../services/authService'
@@ -15,6 +17,7 @@ const router = createRouter({
     { path: '/auth', name: 'auth', component: AuthGate },
     { path: '/', name: 'dashboard', component: Dashboard, meta: { requiresAuth: true } },
     { path: '/content', name: 'content', component: ContentManagementPage, meta: { requiresAuth: true } },
+    { path: '/content-approval', name: 'content-approval', component: ContentApprovalWorkflowPage, meta: { requiresAuth: true } },
     {
       path: '/social-news',
       name: 'social-news',
@@ -27,7 +30,7 @@ const router = createRouter({
     {
       path: '/lifestyle',
       name: 'lifestyle',
-      component: SectionPage,
+      component: LifestyleInfoPage,
       meta: { requiresAuth: true, title: '생활 정보', description: '생활 지원 관련 데이터를 확인합니다.', dataView: true },
     },
     { path: '/immigration', name: 'immigration', component: ImmigrationNoticePage, meta: { requiresAuth: true } },

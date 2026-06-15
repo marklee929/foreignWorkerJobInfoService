@@ -956,9 +956,22 @@ class NewsRepository:
                 cur.execute(
                     """
                     SELECT published_at
-                    FROM social_news.publish_log
-                    WHERE channel = 'facebook'
-                      AND status IN ('PUBLISHED', 'DRY_RUN')
+                    FROM (
+                        SELECT published_at, id
+                        FROM social_news.publish_log
+                        WHERE channel = 'facebook'
+                          AND status IN ('PUBLISHED', 'DRY_RUN')
+                          AND published_at IS NOT NULL
+                        UNION ALL
+                        SELECT published_at, id
+                        FROM social_news.candidate
+                        WHERE published_at IS NOT NULL
+                          AND COALESCE(facebook_post_url, '') != ''
+                          AND (
+                              publish_status IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED')
+                              OR status IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED')
+                          )
+                    ) published_events
                     ORDER BY published_at DESC, id DESC
                     LIMIT 1
                     """
@@ -1011,7 +1024,7 @@ class NewsRepository:
                         post_expired_reason = %s,
                         publish_status = 'POST_EXPIRED',
                         updated_at = CURRENT_TIMESTAMP
-                    WHERE collected_at < %s
+                    WHERE COALESCE(last_seen_at, collected_at) < %s
                       AND publish_status = 'READY_TO_PUBLISH'
                       AND COALESCE(post_expired, FALSE) = FALSE
                       AND published_at IS NULL
@@ -1034,7 +1047,7 @@ class NewsRepository:
                         publish_status = 'READY_TO_PUBLISH',
                         status = CASE WHEN status = 'POST_EXPIRED' THEN 'READY_TO_PUBLISH' ELSE status END,
                         updated_at = CURRENT_TIMESTAMP
-                    WHERE collected_at >= %s
+                    WHERE COALESCE(last_seen_at, collected_at) >= %s
                       AND publish_status = 'POST_EXPIRED'
                       AND COALESCE(evaluation_score, 0) >= COALESCE(NULLIF(score_threshold, 0), 40)
                       AND published_at IS NULL
@@ -1059,7 +1072,7 @@ class NewsRepository:
                         status = CASE WHEN status = 'POST_EXPIRED' THEN 'READY_TO_PUBLISH' ELSE status END,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE publish_status = 'POST_EXPIRED'
-                      AND collected_at >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
+                      AND COALESCE(last_seen_at, collected_at) >= CURRENT_TIMESTAMP - INTERVAL '24 hours'
                       AND COALESCE(post_expired_reason, '') IN ('DAILY_CYCLE_EXPIRED', 'ROLLING_24H_EXPIRED')
                       AND COALESCE(evaluation_score, 0) >= COALESCE(NULLIF(score_threshold, 0), 40)
                       AND published_at IS NULL

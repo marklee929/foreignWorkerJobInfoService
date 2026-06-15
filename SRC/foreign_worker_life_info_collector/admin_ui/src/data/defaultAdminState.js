@@ -1,6 +1,7 @@
 import {
   Activity,
   BriefcaseBusiness,
+  CheckSquare,
   Database,
   FileText,
   Globe2,
@@ -12,6 +13,7 @@ import {
 export const navItems = [
   { label: '대시보드', icon: Activity, path: '/' },
   { label: '콘텐츠 관리', icon: Database, path: '/content' },
+  { label: '콘텐츠 승인', icon: CheckSquare, path: '/content-approval' },
   { label: '소셜 뉴스', icon: Network, path: '/social-news' },
   { label: '채용정보', icon: BriefcaseBusiness, path: '/occupation' },
   { label: '생활 정보', icon: FileText, path: '/lifestyle' },

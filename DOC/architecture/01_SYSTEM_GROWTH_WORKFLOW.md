@@ -418,3 +418,9 @@ This workflow is working when:
 * admin can see and control the system safely
 * automation can run without crossing protected boundaries
 * publishing improves trust rather than creating noise
+
+## Related Documents
+
+- `DOC/flowchart/flowchart-flow-audit.md`
+  - Use this as the detailed audit companion for the product workflow.
+  - It expands the workflow into gate-level issues such as source validity, duplicate signal, user value evaluation, content candidate promotion, publishing safety, and feedback loops.

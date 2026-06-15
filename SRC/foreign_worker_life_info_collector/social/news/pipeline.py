@@ -140,7 +140,7 @@ class NewsPipeline:
                 skip_message,
                 payload_json=json.dumps(self.selection_log_payload(selection), ensure_ascii=False),
             )
-            if os.getenv("NEWS_NOTIFY_NO_PUBLISH", "true").lower() in {"1", "true", "yes", "on"}:
+            if os.getenv("NEWS_NOTIFY_NO_PUBLISH", "false").lower() in {"1", "true", "yes", "on"}:
                 if no_publish_code == "NO_SAFE_CANDIDATE":
                     notification = self.telegram_notifier.notify_no_safe_candidate(selection, dry_run=dry_run)
                 else:
@@ -1376,15 +1376,23 @@ class NewsPipeline:
         for candidate in self.repository.list_candidates():
             if candidate.status != "SKIPPED":
                 continue
-            if not candidate.skip_reason.startswith("게시 기준"):
+            skip_reason = candidate.skip_reason or ""
+            recoverable_reason = (
+                skip_reason.startswith("게시 기준")
+                or "rolling 24-hour publishing window" in skip_reason
+                or "posting criteria" in skip_reason
+                or "Below minimum safety score" in skip_reason
+            )
+            if not recoverable_reason:
                 continue
             if candidate.evaluation_score < minimum_safe_score:
                 continue
-            if parse_iso(candidate.collected_at) < cutoff:
+            if candidate_seen_at(candidate) < cutoff:
                 continue
             candidate.status = "READY_TO_PUBLISH"
             candidate.publish_status = "READY_TO_PUBLISH"
             candidate.post_expired = False
+            candidate.skip_reason = ""
             candidate.selection_reason = f"rolling 24시간 게시 기준 적용: 최소 안전 점수 {minimum_safe_score:.0f}점 이상 후보를 대기열로 복구"
             self.repository.update_candidate(candidate)
             restored += 1
@@ -1395,7 +1403,7 @@ class NewsPipeline:
         cutoff = self.publish_window_start()
         repaired = 0
         for candidate in self.repository.list_candidates():
-            if parse_iso(candidate.collected_at) < cutoff:
+            if candidate_seen_at(candidate) < cutoff:
                 continue
             if candidate.published_at or candidate.facebook_post_url:
                 continue

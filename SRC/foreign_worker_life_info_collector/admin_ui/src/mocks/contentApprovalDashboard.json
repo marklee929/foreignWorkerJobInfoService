@@ -1,0 +1,15 @@
+{
+  "total": 4,
+  "collected": 0,
+  "generated": 1,
+  "sentToTelegram": 1,
+  "approved": 1,
+  "rejected": 1,
+  "published": 0,
+  "statusCounts": {
+    "GENERATED": 1,
+    "SENT_TO_TELEGRAM": 1,
+    "APPROVED": 1,
+    "REJECTED": 1
+  }
+}

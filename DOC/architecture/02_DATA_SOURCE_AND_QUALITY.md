@@ -597,3 +597,12 @@ This quality system is working when:
 - local LLM is used only when useful
 - content management receives useful publishable candidates
 - admin can see why an item was accepted, blocked, or reviewed
+
+## Related Documents
+
+- `DOC/flowchart/flowchart-flow-audit.md`
+  - See Findings 2, 3, 4, and 5 for the source/data quality issues that this document must enforce:
+    - URL lifecycle separation
+    - content missing as terminal validation
+    - duplicate noise vs duplicate signal
+    - user value and subscription-oriented scoring

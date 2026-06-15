@@ -4,12 +4,16 @@ import java.util.Properties;
 
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.TelegramBotsApi;
+import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
 import org.telegram.telegrambots.meta.api.methods.BotApiMethod;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 import org.telegram.telegrambots.meta.generics.BotSession;
 import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
@@ -17,6 +21,7 @@ import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
 import jakarta.annotation.PostConstruct; // PostConstruct import 추가
 import jakarta.annotation.PreDestroy; // PreDestroy import 추가
 import fwj.aniss.api.common.utils.CommonUtils;
+import fwj.aniss.api.content.telegram.TelegramReviewUpdateService;
 
 @Component
 public class Bot extends TelegramLongPollingBot {
@@ -30,6 +35,12 @@ public class Bot extends TelegramLongPollingBot {
 
     @Value("${spring.profile.value}")
     private String ENV;
+
+    private final ObjectProvider<TelegramReviewUpdateService> telegramReviewUpdateServiceProvider;
+
+    public Bot(ObjectProvider<TelegramReviewUpdateService> telegramReviewUpdateServiceProvider) {
+        this.telegramReviewUpdateServiceProvider = telegramReviewUpdateServiceProvider;
+    }
 
     // @Autowired
     // private MemberService memberService;
@@ -87,6 +98,23 @@ public class Bot extends TelegramLongPollingBot {
 
     @Override
     public void onUpdateReceived(Update update) {
+        TelegramReviewUpdateService telegramReviewUpdateService = telegramReviewUpdateServiceProvider.getIfAvailable();
+        if (telegramReviewUpdateService != null) {
+            try {
+                if (telegramReviewUpdateService.handleUpdate(update)) {
+                    if (update.hasCallbackQuery()) {
+                        answerCallback(update.getCallbackQuery().getId(), "Review action recorded.");
+                    }
+                    return;
+                }
+            } catch (RuntimeException ex) {
+                if (update != null && update.hasCallbackQuery()) {
+                    answerCallback(update.getCallbackQuery().getId(), "Review action failed: " + ex.getMessage());
+                    return;
+                }
+            }
+        }
+
         if (update.hasMessage() && update.getMessage().hasText()) {
             String messageText = update.getMessage().getText();
             long chatId = update.getMessage().getChatId();
@@ -132,6 +160,34 @@ public class Bot extends TelegramLongPollingBot {
             // // }
             // }
         }
+    }
+
+    public Integer sendReviewMessage(String chatId, String text, InlineKeyboardMarkup replyMarkup) {
+        if (botSession == null || !botSession.isRunning()) {
+            throw new IllegalStateException("Telegram Bot session is not active.");
+        }
+
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(text);
+        message.setReplyMarkup(replyMarkup);
+
+        try {
+            Message sent = execute(message);
+            return sent == null ? null : sent.getMessageId();
+        } catch (TelegramApiException e) {
+            throw new IllegalStateException("Failed to send Telegram review message: " + e.getMessage(), e);
+        }
+    }
+
+    public void answerCallback(String callbackQueryId, String text) {
+        if (callbackQueryId == null || callbackQueryId.isBlank()) {
+            return;
+        }
+        AnswerCallbackQuery answer = new AnswerCallbackQuery();
+        answer.setCallbackQueryId(callbackQueryId);
+        answer.setText(text);
+        sendMessage(answer);
     }
 
     public void sendTextMessage(String chatId, String text) {

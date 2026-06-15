@@ -1,0 +1,40 @@
+[
+  {
+    "id": 501,
+    "sourcePlatform": "reddit",
+    "sourceUrl": "https://www.reddit.com/r/korea/",
+    "topic": "Local sample signal: visa document checklist questions",
+    "language": "en",
+    "country": "KR",
+    "category": "community_signal",
+    "questionPattern": "What documents should I prepare before visiting immigration?",
+    "frequencyScore": 71.00,
+    "urgencyScore": 82.00,
+    "sampleCount": 14,
+    "authorHash": "",
+    "rawRetentionPolicy": "ANONYMIZED_SUMMARY_ONLY",
+    "piiCheckedYn": true,
+    "usableForContentYn": true,
+    "termsRiskLevel": "HIGH",
+    "createdAt": "2026-06-14T12:08:00+09:00"
+  },
+  {
+    "id": 502,
+    "sourcePlatform": "public_community_trend",
+    "sourceUrl": "",
+    "topic": "Local sample signal: housing deposit safety questions",
+    "language": "en",
+    "country": "KR",
+    "category": "community_signal",
+    "questionPattern": "What should I check before signing a housing contract?",
+    "frequencyScore": 64.00,
+    "urgencyScore": 70.00,
+    "sampleCount": 11,
+    "authorHash": "",
+    "rawRetentionPolicy": "ANONYMIZED_SUMMARY_ONLY",
+    "piiCheckedYn": true,
+    "usableForContentYn": true,
+    "termsRiskLevel": "MEDIUM",
+    "createdAt": "2026-06-14T12:08:00+09:00"
+  }
+]

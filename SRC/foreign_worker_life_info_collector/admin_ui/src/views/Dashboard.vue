@@ -11,8 +11,10 @@ import {
   fetchCandidates,
   fetchDashboardSummary,
   fetchFacebookStatus,
+  fetchImmigrationBotStatus,
   fetchJobCollectorLogs,
   fetchJobCollectorStatus,
+  fetchLifestyleBotStatus,
   fetchLlamaStatus,
   fetchLogs,
   fetchModules,
@@ -20,10 +22,14 @@ import {
   reconnectLlama,
   resetBotError,
   startBot,
+  startImmigrationBot,
   startJobCollectorScheduler,
+  startLifestyleBot,
   startLlama,
   stopBot,
+  stopImmigrationBot,
   stopJobCollectorScheduler,
+  stopLifestyleBot,
   stopLlama,
 } from '../services/apiClient'
 import { logoutAdmin, resetDeviceId } from '../services/authService'
@@ -35,6 +41,8 @@ const candidates = ref([])
 const logs = ref([])
 const jobLogs = ref([])
 const botStatus = ref({ status: 'STOPPED', label: '중지됨', lastErrorMessage: '' })
+const lifestyleBotStatus = ref({ status: 'STOPPED', label: '중지됨', lastErrorMessage: '' })
+const immigrationBotStatus = ref({ status: 'STOPPED', label: '중지됨', lastErrorMessage: '' })
 const facebookStatus = ref({ page_id: '', page_token_fingerprint: '', page_token_masked: '', page_token_env_key: 'FACEBOOK_PAGE_ACCESS_TOKEN' })
 const jobCollectorStatus = ref({ status: 'STOPPED', schedulerEnabled: false, latest: null, settings: {} })
 const occupationDashboard = ref({ job_count: 0, occupation_count: 0, latest_status: null })
@@ -42,6 +50,8 @@ const llamaStatus = ref({ enabled: false, connected: false, endpoint: '-', model
 const loadError = ref('')
 const loading = ref(true)
 const botBusy = ref(false)
+const lifestyleBotBusy = ref(false)
+const immigrationBotBusy = ref(false)
 const jobBusy = ref(false)
 const llamaBusy = ref(false)
 const dashboardLoaded = ref(false)
@@ -54,22 +64,21 @@ let refreshTimer = null
 let lastDashboardLoadAt = 0
 
 const statusCards = computed(() => [
-  { label: '전체 뉴스', value: String(summary.value.candidate_count || 0), delta: '수집', tone: 'primary' },
-  { label: '오늘 게시 대기', value: String(summary.value.today_ready_count || 0), delta: 'READY', tone: 'secondary' },
-  { label: '게시 완료', value: String(summary.value.published_count || 0), delta: '완료', tone: 'neutral' },
+  { label: '전체 뉴스', value: String(summary.value.candidate_count || 0), delta: '누적', tone: 'primary' },
+  { label: '자동 후보', value: String(summary.value.today_ready_count || 0), delta: '24H READY', tone: 'secondary' },
+  { label: '누적 게시', value: String(summary.value.published_count || 0), delta: '누적', tone: 'neutral' },
   { label: '전날 만료', value: String(summary.value.previous_post_expired_count || 0), delta: 'POST_EXPIRED', tone: 'tertiary' },
   { label: '게시 만료', value: String(summary.value.post_expired_count || 0), delta: '누적', tone: 'neutral' },
   { label: '실패', value: String(summary.value.failed_count || 0), delta: '오류', tone: 'error' },
 ])
 
 const publishStatusItems = computed(() => [
-  { label: '오늘 수집 기사', value: summary.value.today_article_count || 0 },
-  { label: '오늘 미게시 기사', value: summary.value.today_unposted_count || 0 },
+  { label: '24h 수집/갱신', value: summary.value.today_article_count || 0 },
   { label: '평균 점수', value: Number(summary.value.avg_score || 0).toFixed(2) },
   { label: '현재 threshold', value: summary.value.current_threshold || 50 },
-  { label: 'READY 후보', value: summary.value.ready_count || summary.value.today_ready_count || 0 },
+  { label: '자동 후보', value: summary.value.ready_count || summary.value.today_ready_count || 0 },
   { label: '재시도 후보', value: summary.value.retryable_count || 0 },
-  { label: '오늘 게시 완료', value: summary.value.posted_today_count || 0 },
+  { label: '24h 게시 완료', value: summary.value.posted_today_count || 0 },
   { label: 'COOLDOWN', value: summary.value.cooldown_active ? '대기 중' : '게시 가능' },
   { label: '다음 게시 가능', value: summary.value.next_publish_at || '-' },
 ])
@@ -148,8 +157,28 @@ const botCards = computed(() => [
     detail: `직업정보 ${occupationDashboard.value.occupation_count || 0}건 / 직무정보 ${occupationDashboard.value.job_count || 0}건`,
   },
   { key: 'content-bot', name: '콘텐츠 생성 봇', description: '추가 예정', status: 'PLANNED', active: false, planned: true },
-  { key: 'lifestyle-bot', name: '생활정보 봇', description: '추가 예정', status: 'PLANNED', active: false, planned: true },
-  { key: 'immigration-bot', name: '출입국 봇', description: '추가 예정', status: 'PLANNED', active: false, planned: true },
+  {
+    key: 'lifestyle-bot',
+    name: '생활정보 봇',
+    description: '생활/정착 후보 수집',
+    status: lifestyleBotStatus.value.status,
+    active: lifestyleBotStatus.value.status === 'RUNNING' || lifestyleBotStatus.value.status === 'STARTING',
+    error: lifestyleBotStatus.value.status === 'ERROR',
+    busy: lifestyleBotBusy.value,
+    toggle: handleToggleLifestyleBot,
+    detail: lifestyleBotStatus.value.lastErrorMessage || lifestyleBotStatus.value.message || '생활정보 카테고리 수집 대기',
+  },
+  {
+    key: 'immigration-bot',
+    name: '출입국 봇',
+    description: '법무부/하이코리아 공식 공지 수집',
+    status: immigrationBotStatus.value.status,
+    active: immigrationBotStatus.value.status === 'RUNNING' || immigrationBotStatus.value.status === 'STARTING',
+    error: immigrationBotStatus.value.status === 'ERROR',
+    busy: immigrationBotBusy.value,
+    toggle: handleToggleImmigrationBot,
+    detail: immigrationBotStatus.value.lastErrorMessage || immigrationBotStatus.value.message || '공식 출처 수집 대기',
+  },
   {
     key: 'job-collector',
     name: '채용정보 봇',
@@ -273,6 +302,8 @@ async function loadDashboard({ silent = false } = {}) {
     ['modules', fetchModules],
     ['candidates', fetchCandidates],
     ['bot', fetchBotStatus],
+    ['lifestyleBot', fetchLifestyleBotStatus],
+    ['immigrationBot', fetchImmigrationBotStatus],
     ['llama', fetchLlamaStatus],
     ['jobCollector', fetchJobCollectorStatus],
     ['occupation', fetchOccupationDashboard],
@@ -305,6 +336,8 @@ async function loadDashboard({ silent = false } = {}) {
     const modulePayload = value('modules', modules.value)
     const candidatePayload = value('candidates', { items: candidates.value })
     const botPayload = value('bot', botStatus.value)
+    const lifestyleBotPayload = value('lifestyleBot', lifestyleBotStatus.value)
+    const immigrationBotPayload = value('immigrationBot', immigrationBotStatus.value)
     const llamaPayload = value('llama', llamaStatus.value)
     const jobPayload = value('jobCollector', jobCollectorStatus.value)
     const occupationPayload = value('occupation', occupationDashboard.value)
@@ -318,6 +351,8 @@ async function loadDashboard({ silent = false } = {}) {
     modules.value = modulePayload
     candidates.value = candidatePayload.items || candidatePayload
     botStatus.value = normalizeBotPayload(botPayload)
+    lifestyleBotStatus.value = normalizeBotPayload(lifestyleBotPayload)
+    immigrationBotStatus.value = normalizeBotPayload(immigrationBotPayload)
     llamaStatus.value = llamaPayload
     jobCollectorStatus.value = jobPayload
     occupationDashboard.value = occupationPayload
@@ -348,6 +383,30 @@ async function handleToggleBot() {
     await loadDashboard({ silent: true })
   } finally {
     botBusy.value = false
+  }
+}
+
+async function handleToggleLifestyleBot() {
+  lifestyleBotBusy.value = true
+  try {
+    const active = lifestyleBotStatus.value.status === 'RUNNING' || lifestyleBotStatus.value.status === 'STARTING'
+    const payload = active ? await stopLifestyleBot() : await startLifestyleBot()
+    lifestyleBotStatus.value = normalizeBotPayload(payload)
+    await loadDashboard({ silent: true })
+  } finally {
+    lifestyleBotBusy.value = false
+  }
+}
+
+async function handleToggleImmigrationBot() {
+  immigrationBotBusy.value = true
+  try {
+    const active = immigrationBotStatus.value.status === 'RUNNING' || immigrationBotStatus.value.status === 'STARTING'
+    const payload = active ? await stopImmigrationBot() : await startImmigrationBot()
+    immigrationBotStatus.value = normalizeBotPayload(payload)
+    await loadDashboard({ silent: true })
+  } finally {
+    immigrationBotBusy.value = false
   }
 }
 
@@ -442,7 +501,7 @@ function handleVisibilityChange() {
         <div class="flex items-center border-b border-outline-variant bg-white px-md py-sm">
           <div>
             <h2 class="text-headline">봇 상태</h2>
-            <p class="text-body-sm text-on-surface-variant">운영 봇은 ON/OFF만 제어하고, 추가 예정 봇은 자리만 표시합니다.</p>
+            <p class="text-body-sm text-on-surface-variant">운영 봇은 ON/OFF만 제어하고, 아직 미구현 봇은 자리만 표시합니다.</p>
           </div>
           <span class="ml-auto rounded bg-surface-container px-sm py-xs text-label-caps text-on-surface-variant">
             {{ botCards.filter((bot) => bot.active).length }}개 활동 중

@@ -1,0 +1,38 @@
+[
+  {
+    "id": 301,
+    "generatedContentId": 202,
+    "reviewChannel": "ADMIN",
+    "telegramMessageId": 700001,
+    "reviewerId": "sample-admin",
+    "reviewerName": "Sample Admin",
+    "action": "SENT",
+    "comment": "Local sample review log for SENT_TO_TELEGRAM",
+    "reviewedAt": "2026-06-14T12:03:30+09:00",
+    "createdAt": "2026-06-14T12:03:30+09:00"
+  },
+  {
+    "id": 302,
+    "generatedContentId": 203,
+    "reviewChannel": "ADMIN",
+    "telegramMessageId": 700002,
+    "reviewerId": "sample-admin",
+    "reviewerName": "Sample Admin",
+    "action": "APPROVED",
+    "comment": "Local sample review log for APPROVED",
+    "reviewedAt": "2026-06-14T12:05:00+09:00",
+    "createdAt": "2026-06-14T12:05:00+09:00"
+  },
+  {
+    "id": 303,
+    "generatedContentId": 204,
+    "reviewChannel": "ADMIN",
+    "telegramMessageId": 700003,
+    "reviewerId": "sample-admin",
+    "reviewerName": "Sample Admin",
+    "action": "REJECTED",
+    "comment": "Local sample review log for REJECTED",
+    "reviewedAt": "2026-06-14T12:07:00+09:00",
+    "createdAt": "2026-06-14T12:07:00+09:00"
+  }
+]

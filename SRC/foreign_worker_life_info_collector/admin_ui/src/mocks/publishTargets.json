@@ -1,0 +1,30 @@
+[
+  {
+    "id": 401,
+    "generatedContentId": 201,
+    "targetChannel": "FACEBOOK",
+    "publishStatus": "PENDING",
+    "publishedUrl": "",
+    "externalPostId": "",
+    "publishedAt": null,
+    "errorCategory": "",
+    "errorMessage": "",
+    "requestPayload": "{}",
+    "responsePayload": "{}",
+    "createdAt": "2026-06-14T12:02:00+09:00"
+  },
+  {
+    "id": 402,
+    "generatedContentId": 202,
+    "targetChannel": "SITE",
+    "publishStatus": "PENDING",
+    "publishedUrl": "",
+    "externalPostId": "",
+    "publishedAt": null,
+    "errorCategory": "",
+    "errorMessage": "",
+    "requestPayload": "{}",
+    "responsePayload": "{}",
+    "createdAt": "2026-06-14T12:03:00+09:00"
+  }
+]

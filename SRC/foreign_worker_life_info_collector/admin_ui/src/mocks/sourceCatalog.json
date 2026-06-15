@@ -1,0 +1,101 @@
+[
+  {
+    "group": "Employment",
+    "sourceDomain": "EMPLOYMENT",
+    "sourcePlatform": "work24",
+    "sourceName": "Work24",
+    "category": "employment",
+    "allowedUse": "SOURCE_BACKED_CONTENT",
+    "collectionMode": "API"
+  },
+  {
+    "group": "Employment",
+    "sourceDomain": "EMPLOYMENT",
+    "sourcePlatform": "worknet",
+    "sourceName": "WorkNet",
+    "category": "employment",
+    "allowedUse": "SOURCE_BACKED_CONTENT",
+    "collectionMode": "API"
+  },
+  {
+    "group": "Visa",
+    "sourceDomain": "VISA_IMMIGRATION",
+    "sourcePlatform": "hikorea",
+    "sourceName": "HiKorea",
+    "category": "visa",
+    "allowedUse": "OFFICIAL_REVIEW_REQUIRED",
+    "collectionMode": "CRAWLER_OR_API"
+  },
+  {
+    "group": "Visa",
+    "sourceDomain": "VISA_IMMIGRATION",
+    "sourcePlatform": "moj",
+    "sourceName": "Ministry of Justice",
+    "category": "visa",
+    "allowedUse": "OFFICIAL_REVIEW_REQUIRED",
+    "collectionMode": "CRAWLER_OR_API"
+  },
+  {
+    "group": "Living Information",
+    "sourceDomain": "LIVING_INFO",
+    "sourcePlatform": "housing",
+    "sourceName": "Housing",
+    "category": "housing",
+    "allowedUse": "SOURCE_BACKED_CONTENT",
+    "collectionMode": "MANUAL_OR_CRAWLER"
+  },
+  {
+    "group": "Living Information",
+    "sourceDomain": "LIVING_INFO",
+    "sourcePlatform": "finance",
+    "sourceName": "Finance",
+    "category": "finance",
+    "allowedUse": "SOURCE_BACKED_CONTENT",
+    "collectionMode": "MANUAL_OR_CRAWLER"
+  },
+  {
+    "group": "Living Information",
+    "sourceDomain": "LIVING_INFO",
+    "sourcePlatform": "telecom",
+    "sourceName": "Telecom",
+    "category": "telecom",
+    "allowedUse": "SOURCE_BACKED_CONTENT",
+    "collectionMode": "MANUAL_OR_CRAWLER"
+  },
+  {
+    "group": "Living Information",
+    "sourceDomain": "LIVING_INFO",
+    "sourcePlatform": "healthcare",
+    "sourceName": "Healthcare",
+    "category": "healthcare",
+    "allowedUse": "SOURCE_BACKED_CONTENT",
+    "collectionMode": "MANUAL_OR_CRAWLER"
+  },
+  {
+    "group": "Living Information",
+    "sourceDomain": "LIVING_INFO",
+    "sourcePlatform": "education",
+    "sourceName": "Education",
+    "category": "education",
+    "allowedUse": "SOURCE_BACKED_CONTENT",
+    "collectionMode": "MANUAL_OR_CRAWLER"
+  },
+  {
+    "group": "Community Signals",
+    "sourceDomain": "COMMUNITY",
+    "sourcePlatform": "reddit",
+    "sourceName": "Reddit",
+    "category": "community_signal",
+    "allowedUse": "TOPIC_SIGNAL_ONLY",
+    "collectionMode": "API_WHERE_ALLOWED"
+  },
+  {
+    "group": "Community Signals",
+    "sourceDomain": "COMMUNITY",
+    "sourcePlatform": "public_community_trend",
+    "sourceName": "Public Community Trend",
+    "category": "community_signal",
+    "allowedUse": "TOPIC_SIGNAL_ONLY",
+    "collectionMode": "DISCOVERY_ONLY"
+  }
+]

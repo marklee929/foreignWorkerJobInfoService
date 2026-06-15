@@ -57,15 +57,16 @@ function withQuery(path, params = {}) {
   return query ? `${path}?${query}` : path
 }
 
-function postJson(path, body = {}) {
+function postJson(path, body = {}, options = {}) {
   return requestJson(path, {
     method: 'POST',
     body: JSON.stringify(body),
+    ...options,
   })
 }
 
 export async function fetchDashboardSummary() {
-  return getJson('/api/dashboard/summary')
+  return getJsonWithTimeout('/api/dashboard/summary', 30000)
 }
 
 export async function fetchModules() {
@@ -77,8 +78,72 @@ export async function fetchCandidates(params = {}) {
   return getJson(withQuery('/api/social/news/candidates', params))
 }
 
+export function fetchLifestyleCandidates(params = {}) {
+  return getJson(withQuery('/api/admin/lifestyle/candidates', params))
+}
+
+export function fetchLifestyleCandidateDetail(id) {
+  return getJson(`/api/admin/lifestyle/candidates/${id}`)
+}
+
 export function fetchContentDashboard() {
   return getJson('/api/admin/content/dashboard')
+}
+
+export function fetchContentApprovalDashboard() {
+  return getJson('/api/admin/content-review/dashboard')
+}
+
+export function fetchGeneratedContents(params = {}) {
+  return getJson(withQuery('/api/admin/content/generated', params))
+}
+
+export function fetchGeneratedContentDetail(id) {
+  return getJson(`/api/admin/content/generated/${id}`)
+}
+
+export function collectContentSources(payload = {}) {
+  return postJson('/api/admin/sources/collect', payload)
+}
+
+export function generateContentDrafts(payload = {}) {
+  return postJson('/api/admin/content/generate', payload)
+}
+
+export function runContentE2eDryRun() {
+  return postJson('/api/admin/content/e2e-dry-run')
+}
+
+export function sendContentToTelegram(id, payload = {}) {
+  return postJson(`/api/admin/content/${id}/send-telegram`, payload)
+}
+
+export function approveGeneratedContent(id, payload = {}) {
+  return postJson(`/api/admin/content/${id}/approve`, payload)
+}
+
+export function rejectGeneratedContent(id, payload = {}) {
+  return postJson(`/api/admin/content/${id}/reject`, payload)
+}
+
+export function fetchSourceItems(params = {}) {
+  return getJson(withQuery('/api/admin/source-items', params))
+}
+
+export function fetchSourceCatalog() {
+  return getJson('/api/admin/source-catalog')
+}
+
+export function fetchReviewLogs(params = {}) {
+  return getJson(withQuery('/api/admin/review-logs', params))
+}
+
+export function fetchPublishTargets(params = {}) {
+  return getJson(withQuery('/api/admin/content/publish-targets', params))
+}
+
+export function createCommunitySignal(payload = {}) {
+  return postJson('/api/admin/community-signals', payload)
 }
 
 export function fetchContentCandidates(params = {}) {
@@ -110,7 +175,7 @@ export async function repostCandidate(id) {
 }
 
 export async function cleanupCandidateLinks(payload = {}) {
-  return postJson('/api/social/news/candidates/cleanup-links', payload)
+  return postJson('/api/social/news/candidates/cleanup-links', payload, { timeoutMs: 60000 })
 }
 
 export async function fetchLogs(params = {}) {
@@ -120,6 +185,30 @@ export async function fetchLogs(params = {}) {
 
 export function fetchBotStatus() {
   return getJson('/api/admin/bot/status')
+}
+
+export function fetchLifestyleBotStatus() {
+  return getJson('/api/admin/lifestyle-bot/status')
+}
+
+export function startLifestyleBot() {
+  return postJson('/api/admin/lifestyle-bot/start')
+}
+
+export function stopLifestyleBot() {
+  return postJson('/api/admin/lifestyle-bot/stop')
+}
+
+export function fetchImmigrationBotStatus() {
+  return getJson('/api/admin/immigration-bot/status')
+}
+
+export function startImmigrationBot() {
+  return postJson('/api/admin/immigration-bot/start')
+}
+
+export function stopImmigrationBot() {
+  return postJson('/api/admin/immigration-bot/stop')
 }
 
 export function fetchFacebookStatus() {
