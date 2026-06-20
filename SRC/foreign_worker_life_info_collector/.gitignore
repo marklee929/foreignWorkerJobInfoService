@@ -10,6 +10,8 @@ logs/*
 !logs/.gitkeep
 storage/cache/*
 !storage/cache/.gitkeep
+storage/generated/*
+!storage/generated/.gitkeep
 storage/raw/*
 !storage/raw/.gitkeep
 storage/state/*

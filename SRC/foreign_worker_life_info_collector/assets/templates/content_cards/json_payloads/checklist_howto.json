@@ -1,0 +1,22 @@
+{
+    "template_type": "CHECKLIST_HOWTO",
+    "title": "How to Check Health Insurance Payments in Korea",
+    "subtitle": "Health insurance status can affect clinic visits, visa renewals, and unpaid bills.",
+    "bullets": [
+        "Confirm your payment status.",
+        "Keep monthly receipts.",
+        "Ask NHIS before the deadline.",
+        "Update your address if it changes."
+    ],
+    "source": "NHIS",
+    "date": "2026-06-16",
+    "footer_url": "WorkConnect Korea",
+    "llama_rule": [
+        "For CHECKLIST_HOWTO, generate exactly 4 bullets.",
+        "Each bullet must be short, practical, and action-oriented.",
+        "Do not add '-' because the template already has checklist markers.",
+        "Use English only.",
+        "Do not include legal certainty.",
+        "Do not include system or operation messages."
+    ]
+}

@@ -1,0 +1,23 @@
+{
+    "template_type": "ALERT_REVIEW",
+    "title": "Check Official Sources Before Making Visa Decisions",
+    "subtitle": "Some immigration updates may change or apply only to specific visa types, jobs, cities, or household situations.",
+    "bullets": [
+        "Confirm the original notice before applying.",
+        "Check whether the rule applies to your visa type.",
+        "Ask an official office if the information is unclear."
+    ],
+    "source": "HiKorea",
+    "date": "2026-06-16",
+    "footer_url": "WorkConnect Korea",
+    "llama_rule": [
+        "Generate exactly 3 bullets.",
+        "Use English only.",
+        "Keep the title caution-oriented but calm.",
+        "Do not use panic, emergency, or sensational wording.",
+        "Do not provide legal certainty.",
+        "Always encourage checking official sources.",
+        "Use this template for sensitive, incomplete, source-limited, or review-required information.",
+        "Do not include system or operation messages."
+    ]
+}

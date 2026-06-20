@@ -1,0 +1,367 @@
+{
+  "VISA_IMMIGRATION": {
+    "template_file": "visa immigration template.png",
+    "category_label": "VISA / IMMIGRATION",
+    "positions": {
+      "category": {
+        "x": 780,
+        "y": 55,
+        "max_width": 250,
+        "font_size": 20,
+        "max_lines": 1
+      },
+      "title": {
+        "x": 190,
+        "y": 220,
+        "max_width": 720,
+        "font_size": 54,
+        "max_lines": 3
+      },
+      "subtitle": {
+        "x": 190,
+        "y": 410,
+        "max_width": 720,
+        "font_size": 30,
+        "max_lines": 3
+      },
+      "bullets": [
+        {
+          "x": 100,
+          "y": 690,
+          "max_width": 250,
+          "font_size": 30,
+          "max_lines": 5
+        },
+        {
+          "x": 420,
+          "y": 690,
+          "max_width": 250,
+          "font_size": 30,
+          "max_lines": 5
+        },
+        {
+          "x": 730,
+          "y": 690,
+          "max_width": 250,
+          "font_size": 30,
+          "max_lines": 5
+        }
+      ],
+      "source": {
+        "x": 160,
+        "y": 980,
+        "max_width": 380,
+        "font_size": 22,
+        "max_lines": 1
+      },
+      "date": {
+        "x": 680,
+        "y": 980,
+        "max_width": 260,
+        "font_size": 22,
+        "max_lines": 1
+      },
+      "footer_url": {
+        "x": 160,
+        "y": 1010,
+        "max_width": 760,
+        "font_size": 18,
+        "max_lines": 1
+      }
+    }
+  },
+  "WORK_LABOR_RIGHTS": {
+    "template_file": "work labor right template.png",
+    "category_label": "WORK / LABOR RIGHTS",
+    "positions": {
+      "category": {
+        "x": 790,
+        "y": 48,
+        "max_width": 250,
+        "font_size": 20,
+        "max_lines": 1,
+        "font_color": "#ffffff"
+      },
+      "title": {
+        "x": 180,
+        "y": 160,
+        "max_width": 720,
+        "font_size": 54,
+        "max_lines": 3
+      },
+      "subtitle": {
+        "x": 180,
+        "y": 350,
+        "max_width": 720,
+        "font_size": 30,
+        "max_lines": 3
+      },
+      "bullets": [
+        {
+          "x": 110,
+          "y": 700,
+          "max_width": 250,
+          "font_size": 30,
+          "max_lines": 5
+        },
+        {
+          "x": 420,
+          "y": 700,
+          "max_width": 250,
+          "font_size": 30,
+          "max_lines": 5
+        },
+        {
+          "x": 730,
+          "y": 700,
+          "max_width": 250,
+          "font_size": 30,
+          "max_lines": 5
+        }
+      ],
+      "source": {
+        "x": 175,
+        "y": 980,
+        "max_width": 380,
+        "font_size": 22,
+        "max_lines": 1
+      },
+      "date": {
+        "x": 660,
+        "y": 1000,
+        "max_width": 260,
+        "font_size": 22,
+        "max_lines": 1
+      },
+      "footer_url": {
+        "x": 175,
+        "y": 1010,
+        "max_width": 760,
+        "font_size": 18,
+        "max_lines": 1
+      }
+    }
+  },
+  "LIVING_IN_KOREA": {
+    "template_file": "livin in korea template.png",
+    "category_label": "LIVING IN KOREA",
+    "positions": {
+      "category": {
+        "x": 800,
+        "y": 55,
+        "max_width": 250,
+        "font_size": 20,
+        "max_lines": 1
+      },
+      "title": {
+        "x": 190,
+        "y": 170,
+        "max_width": 700,
+        "font_size": 54,
+        "max_lines": 3
+      },
+      "subtitle": {
+        "x": 190,
+        "y": 380,
+        "max_width": 700,
+        "font_size": 30,
+        "max_lines": 3
+      },
+      "bullets": [
+        {
+          "x": 120,
+          "y": 730,
+          "max_width": 230,
+          "font_size": 25,
+          "max_lines": 5
+        },
+        {
+          "x": 415,
+          "y": 730,
+          "max_width": 230,
+          "font_size": 25,
+          "max_lines": 5
+        },
+        {
+          "x": 710,
+          "y": 730,
+          "max_width": 230,
+          "font_size": 25,
+          "max_lines": 5
+        }
+      ],
+      "source": {
+        "x": 165,
+        "y": 990,
+        "max_width": 380,
+        "font_size": 22,
+        "max_lines": 1
+      },
+      "date": {
+        "x": 670,
+        "y": 1000,
+        "max_width": 260,
+        "font_size": 22,
+        "max_lines": 1
+      },
+      "footer_url": {
+        "x": 165,
+        "y": 1010,
+        "max_width": 760,
+        "font_size": 18,
+        "max_lines": 1
+      }
+    }
+  },
+  "CHECKLIST_HOWTO": {
+    "template_file": "checklist howto template.png",
+    "category_label": "CHECKLIST / HOW TO",
+    "bullet_prefix": "",
+    "positions": {
+      "category": {
+        "x": 780,
+        "y": 52,
+        "max_width": 250,
+        "font_size": 20,
+        "max_lines": 1
+      },
+      "title": {
+        "x": 200,
+        "y": 145,
+        "max_width": 650,
+        "font_size": 40,
+        "max_lines": 3
+      },
+      "subtitle": {
+        "x": 200,
+        "y": 320,
+        "max_width": 650,
+        "font_size": 24,
+        "max_lines": 2
+      },
+      "bullets": [
+        {
+          "x": 215,
+          "y": 530,
+          "max_width": 690,
+          "font_size": 24,
+          "max_lines": 1
+        },
+        {
+          "x": 215,
+          "y": 635,
+          "max_width": 690,
+          "font_size": 24,
+          "max_lines": 1
+        },
+        {
+          "x": 215,
+          "y": 745,
+          "max_width": 690,
+          "font_size": 24,
+          "max_lines": 1
+        },
+        {
+          "x": 215,
+          "y": 850,
+          "max_width": 690,
+          "font_size": 24,
+          "max_lines": 1
+        }
+      ],
+      "source": {
+        "x": 160,
+        "y": 970,
+        "max_width": 360,
+        "font_size": 18,
+        "max_lines": 1
+      },
+      "date": {
+        "x": 650,
+        "y": 970,
+        "max_width": 180,
+        "font_size": 18,
+        "max_lines": 1
+      },
+      "footer_url": {
+        "x": 115,
+        "y": 1000,
+        "max_width": 760,
+        "font_size": 16,
+        "max_lines": 1,
+        "enabled": false
+      }
+    }
+  },
+  "ALERT_REVIEW": {
+    "template_file": "alert review template.png",
+    "category_label": "REVIEW REQUIRED",
+    "positions": {
+      "category": {
+        "x": 785,
+        "y": 55,
+        "max_width": 250,
+        "font_size": 20,
+        "max_lines": 1
+      },
+      "title": {
+        "x": 180,
+        "y": 150,
+        "max_width": 720,
+        "font_size": 54,
+        "max_lines": 3
+      },
+      "subtitle": {
+        "x": 180,
+        "y": 380,
+        "max_width": 720,
+        "font_size": 30,
+        "max_lines": 5
+      },
+      "bullets": [
+        {
+          "x": 100,
+          "y": 690,
+          "max_width": 250,
+          "font_size": 30,
+          "max_lines": 5
+        },
+        {
+          "x": 420,
+          "y": 690,
+          "max_width": 250,
+          "font_size": 30,
+          "max_lines": 5
+        },
+        {
+          "x": 730,
+          "y": 690,
+          "max_width": 250,
+          "font_size": 30,
+          "max_lines": 5
+        }
+      ],
+      "source": {
+        "x": 175,
+        "y": 980,
+        "max_width": 380,
+        "font_size": 22,
+        "max_lines": 1
+      },
+      "date": {
+        "x": 670,
+        "y": 980,
+        "max_width": 260,
+        "font_size": 22,
+        "max_lines": 1
+      },
+      "footer_url": {
+        "x": 175,
+        "y": 1010,
+        "max_width": 760,
+        "font_size": 18,
+        "max_lines": 1
+      }
+    }
+  }
+}

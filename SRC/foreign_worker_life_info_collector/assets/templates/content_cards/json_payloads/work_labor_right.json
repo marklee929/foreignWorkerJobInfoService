@@ -1,0 +1,26 @@
+{
+    "template_type": "WORK_LABOR_RIGHTS",
+    "title": "Basic Labor Rights Foreign Workers Should Check",
+    "subtitle": "Before starting a job in Korea, review your contract, wage terms, working hours, and workplace safety rules.",
+    "bullets": [
+        "Check your written employment contract.",
+        "Confirm wage, overtime, and payday details.",
+        "Ask for help if wages are unpaid or unsafe work occurs."
+    ],
+    "source": "MOEL",
+    "date": "2026-06-16",
+    "footer_url": "WorkConnect Korea",
+    "llama_rule": [
+        "Generate exactly 3 bullets.",
+        "Use English only.",
+        "Focus on labor rights, wages, employment contracts, working hours, workplace safety, minimum wage, industrial accidents, or unpaid wages.",
+        "Each bullet must be short, practical, and action-oriented.",
+        "Do not provide legal certainty.",
+        "Do not say that a worker is definitely eligible for compensation or a legal remedy.",
+        "Encourage checking official sources or contacting a qualified labor office/support center when needed.",
+        "Do not include political opinions.",
+        "Do not include employer accusations unless the source is official and specific.",
+        "Do not include system or operation messages.",
+        "Do not include Korean text."
+    ]
+}

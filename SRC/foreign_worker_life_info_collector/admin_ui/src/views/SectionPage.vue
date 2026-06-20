@@ -4,7 +4,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { ChevronLeft, ChevronRight, RefreshCw, Search, Trash2, Wrench } from '@lucide/vue'
 import Header from '../components/Header.vue'
 import Sidebar from '../components/Sidebar.vue'
+import StatusBadge from '../components/StatusBadge.vue'
+import StatusHelp from '../components/StatusHelp.vue'
 import { navItems } from '../data/defaultAdminState'
+import { statusCodeGuide } from '../data/statusCodes'
 import { cleanupCandidateLinks, deleteCandidates, fetchCandidates } from '../services/apiClient'
 import { logoutAdmin, resetDeviceId } from '../services/authService'
 
@@ -30,6 +33,8 @@ const totalCount = ref(0)
 const pageTitle = computed(() => route.meta.title || '작업 화면')
 const pageDescription = computed(() => route.meta.description || '저장된 데이터를 확인합니다.')
 const isDataView = computed(() => route.meta.dataView === true && route.name === 'social-news')
+const isSystemSettings = computed(() => route.name === 'system-settings')
+const statusGuideGroups = computed(() => statusCodeGuide())
 
 const categoryFilters = {
   content: [],
@@ -92,39 +97,6 @@ function formatDate(value) {
 function formatShortDate(value) {
   const formatted = formatDate(value)
   return formatted === '-' ? '-' : formatted.slice(5)
-}
-
-function statusLabel(status) {
-  const map = {
-    RAW: '원본',
-    CANDIDATE: '후보',
-    COLLECTED: '수집',
-    NORMALIZED: '정규화',
-    SUMMARIZED: '요약완료',
-    SCORED: '점수평가',
-    READY_TO_PUBLISH: '게시대기',
-    READY_TO_REVIEW: '검토대기',
-    REVIEW_REQUIRED: '검토필요',
-    AUTO_RETRY_BLOCKED: '재시막힘',
-    FAILED_REPOST_REQUIRED: '재게시',
-    FAILED_PERMISSION: '권한확인',
-    FAILED_RETRYABLE: '재시도',
-    FAILED: '실패',
-    PUBLISHED: '게시완료',
-    DRY_RUN_PUBLISHED: '테스트',
-    NOTIFIED: '알림완료',
-    DRY_RUN_NOTIFIED: '테스트',
-    DUPLICATE: '중복제외',
-    DUPLICATE_SKIPPED: '중복제외',
-    TEXT_INVALID: '본문오류',
-    SKIPPED: '제외',
-    SKIPPED_LOW_SCORE: '점수미달',
-    POSTED: '게시완료',
-    POST_EXPIRED: '게시만료',
-    SKIPPED_DAILY_RESET: '일일만료',
-    ARCHIVED: '보관',
-  }
-  return map[status] || (status ? '기타상태' : '대기')
 }
 
 async function loadRows() {
@@ -381,7 +353,9 @@ onMounted(loadRows)
                       @change="togglePageSelection"
                     />
                   </th>
-                  <th class="px-md py-sm">상태</th>
+                  <th class="px-md py-sm">
+                    <span class="inline-flex items-center gap-xs">상태 <StatusHelp scope="social-news" title="소스 뉴스 상태" /></span>
+                  </th>
                   <th class="px-md py-sm">제목</th>
                   <th class="px-md py-sm">중복</th>
                   <th class="px-md py-sm">관련 출처</th>
@@ -404,7 +378,7 @@ onMounted(loadRows)
                     <input type="checkbox" :checked="selectedIds.has(item.id)" :aria-label="`${item.title} 선택`" @click.stop @change="toggleRow(item.id)" />
                   </td>
                   <td class="px-md">
-                    <span class="inline-block min-w-[48px] rounded bg-surface-container px-xs py-[2px] text-center text-[10px] font-bold">{{ statusLabel(item.publish_status || item.status) }}</span>
+                    <StatusBadge :code="item.publish_status || item.status" variant="dot" />
                   </td>
                   <td class="max-w-[420px] px-md font-bold">
                     <span class="block truncate">{{ item.title || '제목 없음' }}</span>
@@ -415,9 +389,7 @@ onMounted(loadRows)
                   <td class="px-md text-on-surface-variant">{{ item.source_name || item.source_type || '-' }}</td>
                   <td class="px-md font-mono font-bold text-success">{{ formatScore(item.evaluation_score) }}</td>
                   <td class="px-md">
-                    <span v-if="item.content_candidate_id" class="inline-block min-w-[48px] rounded bg-surface-container px-xs py-[2px] text-center text-[10px] font-bold">
-                      {{ statusLabel(item.content_status) }}
-                    </span>
+                    <StatusBadge v-if="item.content_candidate_id" :code="item.content_status" variant="dot" />
                     <span v-else class="text-on-surface-variant">-</span>
                   </td>
                   <td class="whitespace-nowrap px-md font-mono text-on-surface-variant">{{ formatShortDate(item.last_seen_at || item.collected_at) }}</td>
@@ -439,6 +411,29 @@ onMounted(loadRows)
               </button>
             </div>
           </div>
+        </template>
+
+        <template v-else-if="isSystemSettings">
+          <section class="space-y-md">
+            <div class="rounded border border-outline-variant bg-surface-container-low p-md">
+              <h2 class="text-headline">코드 가이드</h2>
+              <p class="mt-xs text-body-sm text-on-surface-variant">목록 화면의 상태 색상은 이 공통 코드 기준을 사용합니다.</p>
+            </div>
+            <div class="grid gap-md xl:grid-cols-2">
+              <article v-for="group in statusGuideGroups" :key="group.group" class="overflow-hidden rounded border border-outline-variant bg-white">
+                <div class="border-b border-outline-variant bg-surface-container-low px-md py-sm">
+                  <h3 class="text-title-sm font-bold">{{ group.group }}</h3>
+                </div>
+                <div class="divide-y divide-outline-variant">
+                  <div v-for="item in group.items" :key="item.code" class="grid grid-cols-[120px_120px_minmax(0,1fr)] items-center gap-md px-md py-sm text-body-sm">
+                    <code class="font-mono text-[11px] text-on-surface-variant">{{ item.code }}</code>
+                    <StatusBadge :code="item.code" />
+                    <p class="text-on-surface-variant">{{ item.description }}</p>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </section>
         </template>
 
         <template v-else>

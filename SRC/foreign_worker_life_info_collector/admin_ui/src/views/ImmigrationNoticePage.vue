@@ -3,6 +3,8 @@ import { computed, onMounted, ref } from 'vue'
 import { Check, ExternalLink, FileText, RefreshCw, Search } from '@lucide/vue'
 import Header from '../components/Header.vue'
 import Sidebar from '../components/Sidebar.vue'
+import StatusBadge from '../components/StatusBadge.vue'
+import StatusHelp from '../components/StatusHelp.vue'
 import { navItems } from '../data/defaultAdminState'
 import {
   approveImmigrationNotice,
@@ -32,92 +34,9 @@ const totalCount = ref(0)
 
 const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / pageSize)))
 const sourceCounts = computed(() => dashboard.value.source_counts || [])
-const statusGuide = computed(() => [
-  statusMeta('RAW_COLLECTED'),
-  statusMeta('NORMALIZED'),
-  statusMeta('SUMMARIZED'),
-  statusMeta('READY_TO_REVIEW'),
-  statusMeta('READY_TO_PUBLISH'),
-  statusMeta('POSTED'),
-  statusMeta('FAILED'),
-])
 
 function formatDate(value) {
   return value ? String(value).replace('T', ' ').slice(0, 16) : '-'
-}
-
-function statusLabel(value) {
-  const map = {
-    RAW_COLLECTED: '원문 수집',
-    NORMALIZED: '정규화',
-    SUMMARIZED: '요약 완료',
-    READY_TO_REVIEW: '검토 대기',
-    READY_TO_PUBLISH: '게시 대기',
-    POSTED: '게시 완료',
-    ARCHIVED: '보관',
-    FAILED: '실패',
-  }
-  return map[value] || value || '-'
-}
-
-function statusMeta(value) {
-  const map = {
-    RAW_COLLECTED: {
-      code: 'RAW_COLLECTED',
-      label: '원문 수집',
-      dot: 'bg-slate-400',
-      chip: 'border-slate-300 bg-slate-50 text-slate-700',
-    },
-    NORMALIZED: {
-      code: 'NORMALIZED',
-      label: '정규화',
-      dot: 'bg-blue-500',
-      chip: 'border-blue-200 bg-blue-50 text-blue-700',
-    },
-    SUMMARIZED: {
-      code: 'SUMMARIZED',
-      label: '요약 완료',
-      dot: 'bg-cyan-500',
-      chip: 'border-cyan-200 bg-cyan-50 text-cyan-700',
-    },
-    READY_TO_REVIEW: {
-      code: 'READY_TO_REVIEW',
-      label: '검토 대기',
-      dot: 'bg-amber-500',
-      chip: 'border-amber-200 bg-amber-50 text-amber-700',
-    },
-    READY_TO_PUBLISH: {
-      code: 'READY_TO_PUBLISH',
-      label: '게시 대기',
-      dot: 'bg-emerald-500',
-      chip: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-    },
-    POSTED: {
-      code: 'POSTED',
-      label: '게시 완료',
-      dot: 'bg-indigo-500',
-      chip: 'border-indigo-200 bg-indigo-50 text-indigo-700',
-    },
-    ARCHIVED: {
-      code: 'ARCHIVED',
-      label: '보관',
-      dot: 'bg-zinc-400',
-      chip: 'border-zinc-200 bg-zinc-50 text-zinc-700',
-    },
-    FAILED: {
-      code: 'FAILED',
-      label: '실패',
-      dot: 'bg-red-500',
-      chip: 'border-red-200 bg-red-50 text-red-700',
-    },
-  }
-  const fallback = {
-    code: value || 'UNKNOWN',
-    label: statusLabel(value),
-    dot: 'bg-zinc-300',
-    chip: 'border-zinc-200 bg-zinc-50 text-zinc-700',
-  }
-  return map[value] || fallback
 }
 
 async function loadDashboard() {
@@ -224,18 +143,6 @@ onMounted(refreshAll)
             <p class="text-label-caps text-primary">WorkConnect Admin</p>
             <h1 class="text-display-sm font-black">출입국 정보</h1>
             <p class="mt-xs text-body-sm text-on-surface-variant">법무부, 하이코리아, EPS 등 공식 출처의 비자/체류/외국인 정책 공지를 관리합니다.</p>
-            <div class="mt-md flex flex-wrap items-center gap-xs">
-              <span class="mr-xs text-label-caps text-on-surface-variant">상태</span>
-              <span
-                v-for="item in statusGuide"
-                :key="item.code"
-                class="inline-flex items-center gap-xs rounded border px-sm py-xxs text-label-sm font-bold"
-                :class="item.chip"
-              >
-                <span class="h-2.5 w-2.5 rounded-full" :class="item.dot"></span>
-                {{ item.label }}
-              </span>
-            </div>
           </div>
           <div class="flex items-center gap-sm">
             <button class="btn-secondary" type="button" @click="refreshAll">
@@ -286,7 +193,9 @@ onMounted(refreshAll)
             <table class="w-full min-w-[960px] table-fixed text-body-sm">
               <thead class="bg-surface-container">
                 <tr class="border-b border-outline-variant text-left">
-                  <th class="w-[56px] px-md py-sm text-center">상태</th>
+                  <th class="w-[72px] px-md py-sm text-center">
+                    <span class="inline-flex items-center justify-center gap-xs">상태 <StatusHelp scope="immigration" title="출입국 상태" /></span>
+                  </th>
                   <th class="px-md py-sm">제목</th>
                   <th class="w-[130px] px-md py-sm">출처</th>
                   <th class="w-[120px] px-md py-sm">비자</th>
@@ -300,12 +209,7 @@ onMounted(refreshAll)
                 </tr>
                 <tr v-for="row in rows" :key="row.id" class="cursor-pointer border-b border-outline-variant hover:bg-surface-container" @click="openDetail(row)">
                   <td class="px-md py-sm text-center">
-                    <span
-                      class="mx-auto block h-3.5 w-3.5 rounded-full ring-2 ring-white"
-                      :class="statusMeta(row.content_status).dot"
-                      :title="statusLabel(row.content_status)"
-                      :aria-label="statusLabel(row.content_status)"
-                    ></span>
+                    <StatusBadge :code="row.content_status" variant="dot" />
                   </td>
                   <td class="truncate px-md py-sm font-bold">{{ row.title_ko }}</td>
                   <td class="px-md py-sm">{{ row.source_name }}</td>
@@ -377,10 +281,7 @@ onMounted(refreshAll)
             <div class="control-card p-md">
               <p class="flex items-center gap-xs">
                 상태:
-                <span class="inline-flex items-center gap-xs rounded border px-sm py-xxs text-label-sm font-bold" :class="statusMeta(detail.content_status).chip">
-                  <span class="h-2.5 w-2.5 rounded-full" :class="statusMeta(detail.content_status).dot"></span>
-                  {{ statusLabel(detail.content_status) }}
-                </span>
+                <StatusBadge :code="detail.content_status" />
               </p>
               <p>중요도: <b>{{ Number(detail.importance_score || 0).toFixed(0) }}</b></p>
               <p>긴급도: <b>{{ detail.urgency_level }}</b></p>

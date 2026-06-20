@@ -3,6 +3,8 @@ import { computed, onMounted, ref } from 'vue'
 import { AlertCircle, Check, Database, Eye, FileClock, ListChecks, PlayCircle, RefreshCw, Send, X } from '@lucide/vue'
 import Header from '../components/Header.vue'
 import Sidebar from '../components/Sidebar.vue'
+import StatusBadge from '../components/StatusBadge.vue'
+import StatusHelp from '../components/StatusHelp.vue'
 import { navItems } from '../data/defaultAdminState'
 import {
   approveGeneratedContent,
@@ -84,10 +86,6 @@ const currentSourceCatalog = computed(() => {
 
 function formatDate(value) {
   return value ? String(value).replace('T', ' ').slice(0, 19) : '-'
-}
-
-function statusLabel(status) {
-  return status || '-'
 }
 
 function sourceLabel(domain) {
@@ -348,7 +346,9 @@ onMounted(loadAll)
           <table class="w-full min-w-[1180px] border-collapse text-left text-body-sm">
             <thead class="bg-surface-container-low text-label-caps">
               <tr>
-                <th class="px-md py-sm">Status</th>
+                <th class="px-md py-sm">
+                  <span class="inline-flex items-center gap-xs">Status <StatusHelp scope="content-approval" title="콘텐츠 승인 상태" /></span>
+                </th>
                 <th class="px-md py-sm">Title</th>
                 <th class="px-md py-sm">Category</th>
                 <th class="px-md py-sm">Language</th>
@@ -360,7 +360,7 @@ onMounted(loadAll)
             </thead>
             <tbody>
               <tr v-for="row in generatedRows" :key="row.id" class="border-t border-outline-variant hover:bg-surface-container-low">
-                <td class="px-md py-sm font-bold">{{ statusLabel(row.status) }}</td>
+                <td class="px-md py-sm"><StatusBadge :code="row.status" /></td>
                 <td class="max-w-[420px] px-md py-sm">
                   <button class="truncate text-left font-bold hover:text-primary" type="button" @click="openDetail(row)">{{ row.title }}</button>
                   <p class="truncate text-label-sm text-on-surface-variant">{{ row.shortSummary || '-' }}</p>
@@ -479,7 +479,9 @@ onMounted(loadAll)
                 <tr>
                   <th class="px-md py-sm">Content</th>
                   <th class="px-md py-sm">Channel</th>
-                  <th class="px-md py-sm">Status</th>
+                  <th class="px-md py-sm">
+                    <span class="inline-flex items-center gap-xs">Status <StatusHelp scope="content-approval" title="게시 로그 상태" /></span>
+                  </th>
                   <th class="px-md py-sm">External ID</th>
                   <th class="px-md py-sm">Created</th>
                 </tr>
@@ -488,7 +490,7 @@ onMounted(loadAll)
                 <tr v-for="row in publishRows" :key="row.id" class="border-t border-outline-variant">
                   <td class="px-md py-sm font-mono">#{{ row.generatedContentId }}</td>
                   <td class="px-md py-sm">{{ row.targetChannel }}</td>
-                  <td class="px-md py-sm">{{ row.publishStatus }}</td>
+                  <td class="px-md py-sm"><StatusBadge :code="row.publishStatus" /></td>
                   <td class="px-md py-sm">{{ row.externalPostId || '-' }}</td>
                   <td class="px-md py-sm font-mono text-label-sm">{{ formatDate(row.createdAt) }}</td>
                 </tr>
@@ -517,7 +519,10 @@ onMounted(loadAll)
       <section v-if="selectedDetail" class="control-card p-lg">
         <div class="mb-md flex flex-wrap items-start justify-between gap-md">
           <div>
-            <p class="text-label-sm font-bold text-primary">#{{ selectedDetail.id }} / {{ statusLabel(selectedDetail.status) }}</p>
+            <div class="flex items-center gap-sm">
+              <p class="text-label-sm font-bold text-primary">#{{ selectedDetail.id }}</p>
+              <StatusBadge :code="selectedDetail.status" />
+            </div>
             <h2 class="text-headline font-black">{{ selectedDetail.title }}</h2>
           </div>
           <div class="flex flex-wrap gap-xs">
@@ -554,7 +559,7 @@ onMounted(loadAll)
               </div>
             </div>
             <dl class="space-y-sm text-body-sm">
-              <div><dt class="font-bold">Status</dt><dd>{{ statusLabel(selectedDetail.status) }}</dd></div>
+              <div><dt class="font-bold">Status</dt><dd><StatusBadge :code="selectedDetail.status" /></dd></div>
               <div><dt class="font-bold">Original Link</dt><dd class="break-all">{{ selectedDetail.originalLink || '-' }}</dd></div>
               <div><dt class="font-bold">Why It Matters</dt><dd>{{ selectedDetail.whyItMatters || '-' }}</dd></div>
               <div><dt class="font-bold">Check Next</dt><dd class="whitespace-pre-wrap">{{ selectedDetail.checkNext || '-' }}</dd></div>

@@ -3,6 +3,8 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ExternalLink, Eye, RefreshCw, Search } from '@lucide/vue'
 import Header from '../components/Header.vue'
 import Sidebar from '../components/Sidebar.vue'
+import StatusBadge from '../components/StatusBadge.vue'
+import StatusHelp from '../components/StatusHelp.vue'
 import { navItems } from '../data/defaultAdminState'
 import {
   fetchLifestyleCandidateDetail,
@@ -45,7 +47,6 @@ const categories = [
 const pageTitle = computed(() => '생활 정보')
 const totalPages = computed(() => Math.max(1, Math.ceil(totalCount.value / pageSize)))
 const botActive = computed(() => botStatus.value.status === 'RUNNING' || botStatus.value.status === 'STARTING')
-const botStatusLabel = computed(() => botStatus.value.label || statusLabel(botStatus.value.status))
 const cards = computed(() => [
   { label: '전체 후보', value: totalCount.value },
   { label: '표시 중', value: rows.value.length },
@@ -56,27 +57,6 @@ const selectedCandidate = computed(() => detail.value?.candidate || detail.value
 
 function formatDate(value) {
   return value ? String(value).replace('T', ' ').slice(0, 16) : '-'
-}
-
-function statusLabel(value) {
-  const map = {
-    NORMALIZED: '정규화',
-    SUMMARIZED: '요약 완료',
-    SCORED: '점수 평가',
-    READY_TO_PUBLISH: '게시 대기',
-    READY_TO_REVIEW: '검토 대기',
-    POSTED: '게시 완료',
-    PUBLISHED: '게시 완료',
-    FAILED: '실패',
-    DUPLICATE: '중복',
-    SKIPPED_LOW_SCORE: '점수 미달',
-    STOPPED: '중지됨',
-    STARTING: '시작 중',
-    RUNNING: '실행 중',
-    STOPPING: '중지 중',
-    ERROR: '오류',
-  }
-  return map[value] || value || '-'
 }
 
 function sourceLabel(row) {
@@ -208,7 +188,7 @@ onMounted(refreshAll)
       <section class="grid grid-cols-5 gap-md">
         <article class="control-card p-md">
           <p class="text-label-sm text-on-surface-variant">봇 상태</p>
-          <p class="mt-xs text-title-lg font-black" :class="botStatus.status === 'ERROR' ? 'text-error' : botActive ? 'text-success' : ''">{{ botStatusLabel }}</p>
+          <div class="mt-xs"><StatusBadge :code="botStatus.status" /></div>
           <p class="mt-xs truncate text-body-sm text-on-surface-variant">{{ botStatus.lastErrorMessage || botStatus.message || '-' }}</p>
         </article>
         <article v-for="card in cards" :key="card.label" class="control-card p-md">
@@ -240,7 +220,9 @@ onMounted(refreshAll)
             <table class="w-full min-w-[920px] table-fixed text-body-sm">
               <thead class="bg-surface-container-low text-label-caps text-on-surface-variant">
                 <tr class="border-b border-outline-variant text-left">
-                  <th class="w-[96px] px-md py-sm">상태</th>
+                  <th class="w-[96px] px-md py-sm">
+                    <span class="inline-flex items-center gap-xs">상태 <StatusHelp scope="lifestyle" title="생활정보 상태" /></span>
+                  </th>
                   <th class="px-md py-sm">제목</th>
                   <th class="w-[140px] px-md py-sm">카테고리</th>
                   <th class="w-[160px] px-md py-sm">출처</th>
@@ -259,9 +241,7 @@ onMounted(refreshAll)
                 <template v-else>
                   <tr v-for="row in rows" :key="row.id" class="cursor-pointer border-t border-outline-variant hover:bg-surface-container-low" @click="openDetail(row)">
                     <td class="px-md py-sm">
-                      <span class="inline-block min-w-[64px] rounded bg-surface-container px-xs py-[2px] text-center text-[10px] font-bold">
-                        {{ statusLabel(row.publish_status || row.status) }}
-                      </span>
+                      <StatusBadge :code="row.publish_status || row.status" variant="dot" />
                     </td>
                     <td class="truncate px-md py-sm font-bold">{{ row.title || '제목 없음' }}</td>
                     <td class="px-md py-sm">{{ row.content_category || row.category || '-' }}</td>

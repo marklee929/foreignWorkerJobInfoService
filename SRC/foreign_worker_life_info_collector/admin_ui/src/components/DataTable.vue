@@ -1,4 +1,6 @@
 <script setup>
+import StatusHelp from './StatusHelp.vue'
+
 defineProps({
   title: {
     type: String,
@@ -30,7 +32,9 @@ defineProps({
         <tr v-if="type === 'module'">
           <th class="px-md py-sm">모듈</th>
           <th class="px-md py-sm">그룹</th>
-          <th class="px-md py-sm">상태</th>
+          <th class="px-md py-sm">
+            <span class="inline-flex items-center gap-xs">상태 <StatusHelp scope="social-news" title="모듈 상태" /></span>
+          </th>
           <th class="px-md py-sm">역할</th>
           <th class="px-md py-sm">실행</th>
           <th class="px-md py-sm">필수</th>
@@ -43,7 +47,9 @@ defineProps({
           <th class="px-md py-sm">제목</th>
           <th class="px-md py-sm">출처</th>
           <th class="px-md py-sm">점수</th>
-          <th class="px-md py-sm">상태</th>
+          <th class="px-md py-sm">
+            <span class="inline-flex items-center gap-xs">상태 <StatusHelp scope="social-news" title="후보 상태" /></span>
+          </th>
           <th class="px-md py-sm">위험</th>
         </tr>
       </thead>

@@ -1,0 +1,22 @@
+{
+    "template_type": "VISA_IMMIGRATION",
+    "title": "What to Check Before Applying for a Korea Visa",
+    "subtitle": "Visa rules can depend on your purpose of stay, job type, documents, and current immigration status.",
+    "bullets": [
+        "Check the visa type that matches your purpose.",
+        "Prepare official documents before applying.",
+        "Confirm details with HiKorea or immigration office."
+    ],
+    "source": "HiKorea",
+    "date": "2026-06-16",
+    "footer_url": "WorkConnect Korea",
+    "llama_rule": [
+        "For VISA_IMMIGRATION, generate exactly 3 bullets.",
+        "Each bullet must be short, practical, and related to visa, stay status, immigration documents, or official application steps.",
+        "Use English only.",
+        "Do not guarantee eligibility or approval.",
+        "Do not provide legal certainty.",
+        "Always encourage checking official immigration sources.",
+        "Do not include system or operation messages."
+    ]
+}

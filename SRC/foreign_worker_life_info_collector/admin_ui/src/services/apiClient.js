@@ -162,6 +162,14 @@ export function publishContentCandidate(id, payload = {}) {
   return postJson(`/api/admin/content/candidates/${id}/publish`, payload)
 }
 
+export function sendContentCandidateToTelegram(id, payload = {}) {
+  return postJson(`/api/admin/content/candidates/${id}/send-telegram-review`, payload)
+}
+
+export function scoreContentCandidate(id, payload = {}) {
+  return postJson(`/api/admin/content/candidates/${id}/score`, payload)
+}
+
 export function fetchCandidateDetail(id) {
   return getJson(`/api/social/news/candidates/${id}`)
 }
@@ -185,6 +193,22 @@ export async function fetchLogs(params = {}) {
 
 export function fetchBotStatus() {
   return getJson('/api/admin/bot/status')
+}
+
+export function fetchContentBotStatus() {
+  return getJson('/api/admin/content-bot/status')
+}
+
+export function startContentBot() {
+  return postJson('/api/admin/content-bot/start')
+}
+
+export function stopContentBot() {
+  return postJson('/api/admin/content-bot/stop')
+}
+
+export function runContentBotOnce() {
+  return postJson('/api/admin/content-bot/run-once')
 }
 
 export function fetchLifestyleBotStatus() {

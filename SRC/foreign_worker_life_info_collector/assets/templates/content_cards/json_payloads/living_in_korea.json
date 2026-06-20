@@ -1,0 +1,22 @@
+{
+    "template_type": "LIVING_IN_KOREA",
+    "title": "Basic Living Tips for Foreign Residents in Korea",
+    "subtitle": "Daily life in Korea is easier when you know where to check housing, healthcare, banking, and transport information.",
+    "bullets": [
+        "Check your housing contract before signing.",
+        "Keep your health insurance and address updated.",
+        "Use official sources for banking and public service rules."
+    ],
+    "source": "WorkConnect Guide",
+    "date": "2026-06-16",
+    "footer_url": "WorkConnect Korea",
+    "llama_rule": [
+        "For LIVING_IN_KOREA, generate exactly 3 bullets.",
+        "Each bullet must be practical and related to daily settlement life.",
+        "Allowed topics include housing, banking, healthcare, insurance, transportation, telecom, local support, and public services.",
+        "Use English only.",
+        "Do not include travel-only or tourism-only information.",
+        "Do not include legal certainty.",
+        "Do not include system or operation messages."
+    ]
+}

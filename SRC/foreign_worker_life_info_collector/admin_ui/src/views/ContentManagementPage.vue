@@ -3,12 +3,15 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RefreshCw, Search, Send, Shuffle } from '@lucide/vue'
 import Header from '../components/Header.vue'
 import Sidebar from '../components/Sidebar.vue'
+import StatusBadge from '../components/StatusBadge.vue'
+import StatusHelp from '../components/StatusHelp.vue'
 import { navItems } from '../data/defaultAdminState'
 import {
   fetchContentCandidateDetail,
   fetchContentCandidates,
   fetchContentDashboard,
-  publishContentCandidate,
+  scoreContentCandidate,
+  sendContentCandidateToTelegram,
   syncContentCandidates,
 } from '../services/apiClient'
 import { logoutAdmin, resetDeviceId } from '../services/authService'
@@ -19,7 +22,7 @@ const detail = ref(null)
 const publishLogs = ref([])
 const loading = ref(false)
 const syncing = ref(false)
-const publishingId = ref(0)
+const actioningId = ref(0)
 const loadError = ref('')
 const actionMessage = ref('')
 const searchText = ref('')
@@ -68,6 +71,7 @@ const cards = computed(() => [
   { label: '검토 필요', value: dashboard.value.review_count || 0, delta: 'REVIEW' },
   { label: '게시 완료', value: dashboard.value.posted_count || 0, delta: 'POSTED' },
   { label: '뉴스 연동', value: dashboard.value.social_news_count || 0, delta: 'SOCIAL_NEWS' },
+  { label: '생활정보 연동', value: dashboard.value.living_info_count || 0, delta: 'LIVING_INFO' },
   { label: '출입국 연동', value: dashboard.value.immigration_count || 0, delta: 'IMMIGRATION' },
 ])
 
@@ -77,22 +81,6 @@ function formatScore(value) {
 
 function formatDate(value) {
   return value ? String(value).replace('T', ' ').slice(0, 16) : '-'
-}
-
-function statusLabel(status) {
-  const labels = {
-    RAW: '원본',
-    NORMALIZED: '정규화',
-    SUMMARIZED: '요약',
-    SCORED: '채점',
-    READY_TO_REVIEW: '검토 필요',
-    READY_TO_PUBLISH: '게시 가능',
-    POSTED: '게시 완료',
-    FAILED_RETRYABLE: '재시도 가능',
-    POST_EXPIRED: '만료',
-    ARCHIVED: '보관',
-  }
-  return labels[status] || status || '-'
 }
 
 function sourceLabel(value) {
@@ -116,8 +104,8 @@ function contentTypeLabel(value) {
   return labels[value] || value || '-'
 }
 
-function canPublish(row) {
-  return ['READY_TO_PUBLISH', 'FAILED_RETRYABLE'].includes(row.status)
+function canReview(row) {
+  return ['SCORED', 'READY_TO_REVIEW', 'READY_TO_PUBLISH', 'FAILED_RETRYABLE'].includes(row.status)
 }
 
 async function loadDashboard() {
@@ -181,20 +169,39 @@ async function openDetail(row) {
   }
 }
 
-async function publishRow(row) {
-  if (publishingId.value || !canPublish(row)) return
-  publishingId.value = row.id
+async function sendTelegramReview(row) {
+  if (actioningId.value || !canReview(row)) return
+  actioningId.value = row.id
   actionMessage.value = ''
   loadError.value = ''
   try {
-    const result = await publishContentCandidate(row.id, { dryRun: false })
-    actionMessage.value = `게시 요청 완료: ${statusLabel(result.status)}`
+    const result = await sendContentCandidateToTelegram(row.id, {})
+    actionMessage.value = `Telegram 검토 전송: ${result.status || '-'}`
     await loadAll()
     await openDetail(row)
   } catch (error) {
-    loadError.value = error instanceof Error ? error.message : '게시 요청에 실패했습니다.'
+    loadError.value = error instanceof Error ? error.message : 'Telegram 검토 전송에 실패했습니다.'
   } finally {
-    publishingId.value = 0
+    actioningId.value = 0
+  }
+}
+
+async function applyScore(score) {
+  if (!detail.value?.id || actioningId.value) return
+  actioningId.value = detail.value.id
+  actionMessage.value = ''
+  loadError.value = ''
+  try {
+    const result = await scoreContentCandidate(detail.value.id, { score, comment: `Admin UI score ${score}` })
+    actionMessage.value = `점수 반영 완료: ${score}점`
+    if (result.candidate) {
+      detail.value = result.candidate
+    }
+    await loadAll()
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : '점수 반영에 실패했습니다.'
+  } finally {
+    actioningId.value = 0
   }
 }
 
@@ -299,7 +306,9 @@ onMounted(loadAll)
           <table class="w-full min-w-[1680px] border-collapse text-left text-body-sm">
             <thead class="bg-surface-container">
               <tr>
-                <th class="px-md py-sm">상태</th>
+                <th class="px-md py-sm">
+                  <span class="inline-flex items-center gap-xs">상태 <StatusHelp scope="content-management" title="콘텐츠 관리 상태" /></span>
+                </th>
                 <th class="px-md py-sm">제목</th>
                 <th class="px-md py-sm">출처 도메인</th>
                 <th class="px-md py-sm">유형</th>
@@ -317,8 +326,8 @@ onMounted(loadAll)
             <tbody>
               <tr v-for="row in rows" :key="row.id" class="border-t border-outline-variant hover:bg-surface-container-low">
                 <td class="px-md py-sm">
-                  <button class="rounded bg-primary-container px-xs py-xxs text-label-sm font-bold" type="button" @click="openDetail(row)">
-                    {{ statusLabel(row.status) }}
+                  <button class="inline-flex" type="button" @click="openDetail(row)">
+                    <StatusBadge :code="row.status" />
                   </button>
                 </td>
                 <td class="max-w-[380px] px-md py-sm">
@@ -340,9 +349,9 @@ onMounted(loadAll)
                 <td class="px-md py-sm font-mono text-label-sm">{{ formatDate(row.content_updated_at) }}</td>
                 <td class="px-md py-sm font-mono text-label-sm">{{ formatDate(row.published_at) }}</td>
                 <td class="px-md py-sm">
-                  <button class="btn-secondary inline-flex items-center gap-xs" type="button" :disabled="publishingId === row.id || !canPublish(row)" @click="publishRow(row)">
+                  <button class="btn-secondary inline-flex items-center gap-xs" type="button" :disabled="actioningId === row.id || !canReview(row)" @click="sendTelegramReview(row)">
                     <Send :size="14" />
-                    Facebook 게시
+                    Telegram 검토
                   </button>
                 </td>
               </tr>
@@ -370,7 +379,7 @@ onMounted(loadAll)
               <p class="text-label-sm font-bold text-primary">{{ sourceLabel(detail.source_domain) }} / {{ contentTypeLabel(detail.content_type) }} / {{ detail.category || '-' }}</p>
               <h2 class="mt-xs text-headline font-black">{{ detail.title }}</h2>
             </div>
-            <span class="rounded bg-primary-container px-sm py-xs text-label-sm font-bold">{{ statusLabel(detail.status) }}</span>
+            <StatusBadge :code="detail.status" />
           </div>
 
           <dl class="mb-md grid gap-sm text-body-sm md:grid-cols-2">
@@ -416,10 +425,15 @@ onMounted(loadAll)
               <div class="flex justify-between gap-md"><dt>긴급성</dt><dd class="font-mono">{{ formatScore(detail.urgency_score) }}</dd></div>
             </dl>
             <p v-if="detail.review_required_yn" class="mt-md rounded border border-error bg-error-container p-sm text-body-sm text-error">검토 필요: {{ detail.review_reason || '사유 없음' }}</p>
+            <div class="mt-md flex flex-wrap gap-xs">
+              <button v-for="score in [90, 75, 60, 40]" :key="score" class="btn-secondary" type="button" :disabled="actioningId === detail.id" @click="applyScore(score)">
+                {{ score }}점
+              </button>
+            </div>
           </article>
 
           <article class="rounded border border-outline-variant bg-surface p-lg">
-            <h3 class="mb-md text-title font-bold">게시 로그</h3>
+            <h3 class="mb-md text-title font-bold">검토/게시 로그</h3>
             <div v-for="log in publishLogs" :key="log.id" class="mb-sm rounded border border-outline-variant p-sm text-body-sm">
               <div class="flex justify-between gap-md">
                 <b>{{ log.status }}</b>
@@ -432,7 +446,7 @@ onMounted(loadAll)
                 <pre class="mt-xs max-h-48 overflow-auto rounded bg-surface-container-low p-sm text-[11px]">{{ log.request_payload || log.response_payload }}</pre>
               </details>
             </div>
-            <p v-if="!publishLogs.length" class="text-body-sm text-on-surface-variant">게시 로그가 없습니다.</p>
+            <p v-if="!publishLogs.length" class="text-body-sm text-on-surface-variant">검토/게시 로그가 없습니다.</p>
           </article>
         </aside>
       </section>

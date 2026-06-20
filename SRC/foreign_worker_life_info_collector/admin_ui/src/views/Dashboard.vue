@@ -4,11 +4,14 @@ import { Cpu } from '@lucide/vue'
 import Sidebar from '../components/Sidebar.vue'
 import Header from '../components/Header.vue'
 import StatusCard from '../components/StatusCard.vue'
+import StatusBadge from '../components/StatusBadge.vue'
+import StatusHelp from '../components/StatusHelp.vue'
 import LogPanel from '../components/LogPanel.vue'
 import { emptySummary, navItems, runtimeConfig as baseRuntimeConfig } from '../data/defaultAdminState'
 import {
   fetchBotStatus,
   fetchCandidates,
+  fetchContentBotStatus,
   fetchDashboardSummary,
   fetchFacebookStatus,
   fetchImmigrationBotStatus,
@@ -22,11 +25,13 @@ import {
   reconnectLlama,
   resetBotError,
   startBot,
+  startContentBot,
   startImmigrationBot,
   startJobCollectorScheduler,
   startLifestyleBot,
   startLlama,
   stopBot,
+  stopContentBot,
   stopImmigrationBot,
   stopJobCollectorScheduler,
   stopLifestyleBot,
@@ -41,6 +46,7 @@ const candidates = ref([])
 const logs = ref([])
 const jobLogs = ref([])
 const botStatus = ref({ status: 'STOPPED', label: '중지됨', lastErrorMessage: '' })
+const contentBotStatus = ref({ status: 'STOPPED', label: '중지됨', lastErrorMessage: '' })
 const lifestyleBotStatus = ref({ status: 'STOPPED', label: '중지됨', lastErrorMessage: '' })
 const immigrationBotStatus = ref({ status: 'STOPPED', label: '중지됨', lastErrorMessage: '' })
 const facebookStatus = ref({ page_id: '', page_token_fingerprint: '', page_token_masked: '', page_token_env_key: 'FACEBOOK_PAGE_ACCESS_TOKEN' })
@@ -50,6 +56,7 @@ const llamaStatus = ref({ enabled: false, connected: false, endpoint: '-', model
 const loadError = ref('')
 const loading = ref(true)
 const botBusy = ref(false)
+const contentBotBusy = ref(false)
 const lifestyleBotBusy = ref(false)
 const immigrationBotBusy = ref(false)
 const jobBusy = ref(false)
@@ -137,32 +144,33 @@ const llamaServerTypeLabel = computed(() => (llamaStatus.value.managed === false
 
 const botCards = computed(() => [
   {
+    key: 'content-bot',
+    name: '콘텐츠 생성 봇',
+    description: 'Facebook 포맷 생성, Telegram 검토',
+    status: contentBotStatus.value.status,
+    active: Boolean(contentBotStatus.value.enabled) || contentBotStatus.value.status === 'RUNNING' || contentBotStatus.value.status === 'STARTING',
+    error: contentBotStatus.value.status === 'ERROR',
+    busy: contentBotBusy.value,
+    toggle: handleToggleContentBot,
+    detail: contentBotStatus.value.lastErrorMessage || contentBotStatus.value.message || 'Facebook 자동 게시 차단 / Telegram 검토 대기',
+  },
+  {
     key: 'social-news',
     name: '소셜 뉴스 봇',
-    description: '뉴스 수집, 요약, 게시',
+    description: '뉴스 수집, 요약, 후보화',
     status: botStatus.value.status,
     active: botStatus.value.status === 'RUNNING' || botStatus.value.status === 'STARTING',
     error: botStatus.value.status === 'ERROR',
     busy: botBusy.value,
     toggle: handleToggleBot,
-    detail: botStatus.value.lastErrorMessage || `Facebook token fp=${facebookStatus.value.page_token_fingerprint || '-'} / page=${facebookStatus.value.page_id || '-'}`,
+    detail: botStatus.value.lastErrorMessage || '뉴스 수집은 계속 실행, Facebook 게시는 콘텐츠 생성 봇에서만 제어',
   },
-  {
-    key: 'occupation-dictionary',
-    name: '직업정보 봇',
-    description: '고용24 직업/직무 사전',
-    status: occupationDashboard.value.latest_status || 'READY',
-    active: Number(occupationDashboard.value.occupation_count || 0) > 0 || Number(occupationDashboard.value.job_count || 0) > 0,
-    readonly: true,
-    detail: `직업정보 ${occupationDashboard.value.occupation_count || 0}건 / 직무정보 ${occupationDashboard.value.job_count || 0}건`,
-  },
-  { key: 'content-bot', name: '콘텐츠 생성 봇', description: '추가 예정', status: 'PLANNED', active: false, planned: true },
   {
     key: 'lifestyle-bot',
     name: '생활정보 봇',
     description: '생활/정착 후보 수집',
     status: lifestyleBotStatus.value.status,
-    active: lifestyleBotStatus.value.status === 'RUNNING' || lifestyleBotStatus.value.status === 'STARTING',
+    active: Boolean(lifestyleBotStatus.value.enabled) || lifestyleBotStatus.value.status === 'RUNNING' || lifestyleBotStatus.value.status === 'STARTING',
     error: lifestyleBotStatus.value.status === 'ERROR',
     busy: lifestyleBotBusy.value,
     toggle: handleToggleLifestyleBot,
@@ -173,20 +181,29 @@ const botCards = computed(() => [
     name: '출입국 봇',
     description: '법무부/하이코리아 공식 공지 수집',
     status: immigrationBotStatus.value.status,
-    active: immigrationBotStatus.value.status === 'RUNNING' || immigrationBotStatus.value.status === 'STARTING',
+    active: Boolean(immigrationBotStatus.value.enabled) || immigrationBotStatus.value.status === 'RUNNING' || immigrationBotStatus.value.status === 'STARTING',
     error: immigrationBotStatus.value.status === 'ERROR',
     busy: immigrationBotBusy.value,
     toggle: handleToggleImmigrationBot,
     detail: immigrationBotStatus.value.lastErrorMessage || immigrationBotStatus.value.message || '공식 출처 수집 대기',
   },
   {
+    key: 'occupation-dictionary',
+    name: '직업정보 봇',
+    description: '고용24 직업/직무 사전',
+    status: occupationDashboard.value.latest_status || 'READY',
+    active: Number(occupationDashboard.value.occupation_count || 0) > 0 || Number(occupationDashboard.value.job_count || 0) > 0,
+    readonly: true,
+    detail: `직업정보 ${occupationDashboard.value.occupation_count || 0}건 / 직무정보 ${occupationDashboard.value.job_count || 0}건`,
+  },
+  {
     key: 'job-collector',
     name: '채용정보 봇',
-    description: '고용24 채용공고 수집 - 점검중',
+    description: '고용24 채용공고 수집',
     status: 'PLANNED',
     active: false,
     planned: true,
-    detail: jobCollectorStatus.value.lastErrorMessage || '기업회원 API 권한 확인 후 다시 활성화',
+    detail: jobCollectorStatus.value.lastErrorMessage || '기업회원 API 권한 확인 후 활성화 예정',
   },
 ])
 
@@ -301,6 +318,7 @@ async function loadDashboard({ silent = false } = {}) {
     ['summary', fetchDashboardSummary],
     ['modules', fetchModules],
     ['candidates', fetchCandidates],
+    ['contentBot', fetchContentBotStatus],
     ['bot', fetchBotStatus],
     ['lifestyleBot', fetchLifestyleBotStatus],
     ['immigrationBot', fetchImmigrationBotStatus],
@@ -335,6 +353,7 @@ async function loadDashboard({ silent = false } = {}) {
     const summaryPayload = value('summary', summary.value)
     const modulePayload = value('modules', modules.value)
     const candidatePayload = value('candidates', { items: candidates.value })
+    const contentBotPayload = value('contentBot', contentBotStatus.value)
     const botPayload = value('bot', botStatus.value)
     const lifestyleBotPayload = value('lifestyleBot', lifestyleBotStatus.value)
     const immigrationBotPayload = value('immigrationBot', immigrationBotStatus.value)
@@ -350,6 +369,7 @@ async function loadDashboard({ silent = false } = {}) {
     }
     modules.value = modulePayload
     candidates.value = candidatePayload.items || candidatePayload
+    contentBotStatus.value = normalizeBotPayload(contentBotPayload)
     botStatus.value = normalizeBotPayload(botPayload)
     lifestyleBotStatus.value = normalizeBotPayload(lifestyleBotPayload)
     immigrationBotStatus.value = normalizeBotPayload(immigrationBotPayload)
@@ -386,10 +406,22 @@ async function handleToggleBot() {
   }
 }
 
+async function handleToggleContentBot() {
+  contentBotBusy.value = true
+  try {
+    const active = Boolean(contentBotStatus.value.enabled) || contentBotStatus.value.status === 'RUNNING' || contentBotStatus.value.status === 'STARTING'
+    const payload = active ? await stopContentBot() : await startContentBot()
+    contentBotStatus.value = normalizeBotPayload(payload)
+    await loadDashboard({ silent: true })
+  } finally {
+    contentBotBusy.value = false
+  }
+}
+
 async function handleToggleLifestyleBot() {
   lifestyleBotBusy.value = true
   try {
-    const active = lifestyleBotStatus.value.status === 'RUNNING' || lifestyleBotStatus.value.status === 'STARTING'
+    const active = Boolean(lifestyleBotStatus.value.enabled) || lifestyleBotStatus.value.status === 'RUNNING' || lifestyleBotStatus.value.status === 'STARTING'
     const payload = active ? await stopLifestyleBot() : await startLifestyleBot()
     lifestyleBotStatus.value = normalizeBotPayload(payload)
     await loadDashboard({ silent: true })
@@ -401,7 +433,7 @@ async function handleToggleLifestyleBot() {
 async function handleToggleImmigrationBot() {
   immigrationBotBusy.value = true
   try {
-    const active = immigrationBotStatus.value.status === 'RUNNING' || immigrationBotStatus.value.status === 'STARTING'
+    const active = Boolean(immigrationBotStatus.value.enabled) || immigrationBotStatus.value.status === 'RUNNING' || immigrationBotStatus.value.status === 'STARTING'
     const payload = active ? await stopImmigrationBot() : await startImmigrationBot()
     immigrationBotStatus.value = normalizeBotPayload(payload)
     await loadDashboard({ silent: true })
@@ -508,12 +540,12 @@ function handleVisibilityChange() {
           </span>
         </div>
 
-        <div class="max-h-[220px] overflow-y-auto">
-          <div class="flex min-w-full gap-gutter overflow-x-auto p-md">
+        <div class="overflow-x-auto overflow-y-hidden pb-sm">
+          <div class="flex w-max min-w-full gap-gutter p-md">
             <article
               v-for="bot in botCards"
               :key="bot.key"
-              class="min-w-[260px] rounded border border-outline-variant bg-surface-container-low p-sm"
+              class="flex h-[132px] w-[320px] shrink-0 flex-col justify-between rounded border border-outline-variant bg-surface-container-low p-sm"
             >
               <div class="flex items-start justify-between gap-md">
                 <div class="min-w-0">
@@ -632,7 +664,9 @@ function handleVisibilityChange() {
               <th class="px-md py-sm">출처</th>
               <th class="px-md py-sm">점수</th>
               <th class="px-md py-sm">Facebook</th>
-              <th class="px-md py-sm">상태</th>
+              <th class="px-md py-sm">
+                <span class="inline-flex items-center gap-xs">상태 <StatusHelp scope="social-news" title="최근 후보 상태" /></span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -648,7 +682,7 @@ function handleVisibilityChange() {
                 <a v-if="candidate.facebookUrl" class="font-bold text-primary" :href="candidate.facebookUrl" target="_blank" rel="noreferrer">게시글</a>
                 <span v-else class="text-on-surface-variant">-</span>
               </td>
-              <td class="px-md text-on-surface-variant">{{ candidate.status }}</td>
+              <td class="px-md"><StatusBadge :code="candidate.status" variant="dot" /></td>
             </tr>
           </tbody>
         </table>

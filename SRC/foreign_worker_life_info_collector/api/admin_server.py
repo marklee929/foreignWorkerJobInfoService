@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 from urllib.error import HTTPError, URLError
@@ -53,8 +54,43 @@ BOT_STATUS_LABELS = {
     "STARTING": "시작 중",
     "STOPPING": "종료 중",
 }
+CONTENT_BOT_MODULE_KEY = "bot.content_generation"
+LIFESTYLE_BOT_MODULE_KEY = "bot.lifestyle_info"
+IMMIGRATION_BOT_MODULE_KEY = "bot.immigration_info"
+BOT_SWITCH_DEFINITIONS = {
+    CONTENT_BOT_MODULE_KEY: {
+        "group": "bot",
+        "name": "콘텐츠 생성 봇",
+        "description": "Facebook 포맷 생성과 Telegram 검토 전송을 담당합니다.",
+        "run_order": 30,
+    },
+    LIFESTYLE_BOT_MODULE_KEY: {
+        "group": "bot",
+        "name": "생활정보 봇",
+        "description": "생활/정착 관련 후보를 수집합니다.",
+        "run_order": 40,
+    },
+    IMMIGRATION_BOT_MODULE_KEY: {
+        "group": "bot",
+        "name": "출입국 봇",
+        "description": "법무부/하이코리아 공식 공지를 수집합니다.",
+        "run_order": 50,
+    },
+}
 BOT_STOP_EVENT = threading.Event()
 BOT_THREAD: threading.Thread | None = None
+CONTENT_BOT_STATUS = {
+    "status": "STOPPED",
+    "message": "콘텐츠 생성 봇 대기 중",
+    "lastStartedAt": None,
+    "lastStoppedAt": None,
+    "lastErrorAt": None,
+    "lastErrorMessage": None,
+    "lastResult": None,
+}
+CONTENT_BOT_LOCK = threading.Lock()
+CONTENT_BOT_STOP_EVENT = threading.Event()
+CONTENT_BOT_THREAD: threading.Thread | None = None
 LIFESTYLE_BOT_STATUS = {
     "status": "STOPPED",
     "message": "생활정보 봇 대기 중",
@@ -357,22 +393,14 @@ def run_bot_loop() -> None:
                 if BOT_STOP_EVENT.wait(60):
                     break
                 continue
-            write_bot_log("cycle", "STARTED", "뉴스 자동 게시 사이클 시작")
+            content_publish_enabled = bot_switch_enabled(CONTENT_BOT_MODULE_KEY, default=False)
+            write_bot_log(
+                "cycle",
+                "STARTED",
+                "뉴스 수집/자동 게시 사이클 시작" if content_publish_enabled else "뉴스 수집/평가 사이클 시작",
+            )
             try:
-                try:
-                    content_result = run_content_publish_cycle()
-                except Exception as exc:
-                    content_result = {"ok": False, "sync": {}, "publish": {"status": "FAILED", "error_message": str(exc)[:180]}}
-                content_publish = content_result.get("publish", {}) if isinstance(content_result, dict) else {}
-                write_bot_log(
-                    "content_publish",
-                    content_publish.get("status", "COMPLETED"),
-                    (
-                        f"Content publish cycle: sync {content_result.get('sync', {}).get('synced_total', 0) if isinstance(content_result, dict) else 0} rows, "
-                        f"publish {content_publish.get('status', '-')}, candidate {content_publish.get('candidate_id', '-')}"
-                    ),
-                )
-                result = NewsBot().run(keyword=keyword, dry_run=False, limit=1)
+                result = NewsBot().run(keyword=keyword, dry_run=not content_publish_enabled, limit=1)
             except Exception as exc:
                 if not is_retryable_db_error(exc):
                     raise
@@ -391,14 +419,14 @@ def run_bot_loop() -> None:
             write_bot_log(
                 "cycle",
                 "COMPLETED",
-                f"사이클 완료: 수집 {result.get('collected_count', 0)}건, 저장 {result.get('saved_count', 0)}건, 게시 후보 {result.get('selected_count', 0)}건",
+                f"뉴스 수집 완료: 수집 {result.get('collected_count', 0)}건, 저장 {result.get('saved_count', 0)}건, 게시 후보 {result.get('selected_count', 0)}건",
             )
             if result.get("selected_count", 0) == 0 and no_publish_code == "WAITING_COOLDOWN":
                 write_bot_log(
                     "facebook_publish",
                     "WAITING",
                     (
-                        f"Facebook 게시 대기: 쿨다운 적용 중, READY {selection_log.get('ready_count', 0)}건, "
+                        f"뉴스 게시 대기: 쿨다운 적용 중, READY {selection_log.get('ready_count', 0)}건, "
                         f"후보풀 {selection_log.get('candidate_pool_count', 0)}건, "
                         f"남은 {int((int(selection_log.get('cooldown_remaining') or 0) + 59) // 60)}분"
                     ),
@@ -407,7 +435,7 @@ def run_bot_loop() -> None:
                 write_bot_log(
                     "facebook_publish",
                     "SKIPPED",
-                    f"Facebook 게시 안 함: 게시 후보 0건, threshold {float(result.get('threshold') or 0):.0f}점 미달 또는 중복 제외",
+                    f"뉴스 게시 후보 없음: threshold {float(result.get('threshold') or 0):.0f}점 미달 또는 중복 제외",
                 )
             if publish_results and all(item.get("status") == "FAILED" for item in publish_results):
                 consecutive_failures += 1
@@ -456,6 +484,74 @@ def reset_bot_error() -> dict[str, Any]:
 
 def utc_iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def bot_switch_definition(module_key: str) -> dict[str, Any]:
+    return BOT_SWITCH_DEFINITIONS.get(
+        module_key,
+        {
+            "group": "bot",
+            "name": module_key,
+            "description": "",
+            "run_order": 999,
+        },
+    )
+
+
+def ensure_bot_switch(module_key: str) -> dict[str, Any]:
+    definition = bot_switch_definition(module_key)
+    try:
+        content_repository()
+        return execute_one(
+            """
+            INSERT INTO admin.module_config(module_key, module_group, module_name, description, is_enabled, is_required, run_order, config_json)
+            VALUES (%s, %s, %s, %s, FALSE, FALSE, %s, '{}'::jsonb)
+            ON CONFLICT (module_key) DO UPDATE
+            SET module_group = EXCLUDED.module_group,
+                module_name = EXCLUDED.module_name,
+                description = EXCLUDED.description,
+                run_order = EXCLUDED.run_order,
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING module_key, is_enabled, config_json
+            """,
+            (
+                module_key,
+                definition["group"],
+                definition["name"],
+                definition["description"],
+                definition["run_order"],
+            ),
+        )
+    except Exception as exc:
+        print(f"[bot-switch][WARN] {module_key} 스위치 초기화 실패: {str(exc)[:180]}", flush=True)
+        return {"module_key": module_key, "is_enabled": False, "config_json": {}}
+
+
+def bot_switch_enabled(module_key: str, default: bool = False) -> bool:
+    try:
+        row = ensure_bot_switch(module_key)
+        return bool(row.get("is_enabled", default))
+    except Exception:
+        return default
+
+
+def set_bot_switch_enabled(module_key: str, enabled: bool) -> bool:
+    try:
+        ensure_bot_switch(module_key)
+        row = execute_one(
+            """
+            UPDATE admin.module_config
+            SET is_enabled = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE module_key = %s
+            RETURNING is_enabled
+            """,
+            (bool(enabled), module_key),
+        )
+        return bool(row.get("is_enabled", enabled))
+    except Exception as exc:
+        print(f"[bot-switch][WARN] {module_key} 스위치 저장 실패: {str(exc)[:180]}", flush=True)
+        return bool(enabled)
 
 
 def one_shot_bot_status(state: dict[str, Any], thread: threading.Thread | None, lock: threading.Lock) -> dict[str, Any]:
@@ -516,6 +612,309 @@ def set_one_shot_bot_status(
         }
 
 
+def content_bot_status() -> dict[str, Any]:
+    enabled = bot_switch_enabled(CONTENT_BOT_MODULE_KEY, default=False)
+    with CONTENT_BOT_LOCK:
+        if CONTENT_BOT_THREAD and CONTENT_BOT_THREAD.is_alive() and CONTENT_BOT_STATUS.get("status") not in {"STARTING", "STOPPING"}:
+            CONTENT_BOT_STATUS["status"] = "RUNNING"
+        elif (not CONTENT_BOT_THREAD or not CONTENT_BOT_THREAD.is_alive()) and CONTENT_BOT_STATUS.get("status") in {"RUNNING", "STARTING", "STOPPING"}:
+            CONTENT_BOT_STATUS["status"] = "STOPPED"
+            CONTENT_BOT_STATUS["lastStoppedAt"] = CONTENT_BOT_STATUS.get("lastStoppedAt") or utc_iso_now()
+        status = CONTENT_BOT_STATUS.get("status") or "STOPPED"
+        return {
+            "status": status,
+            "label": BOT_STATUS_LABELS.get(status, status),
+            "message": CONTENT_BOT_STATUS.get("message") or "",
+            "lastStartedAt": CONTENT_BOT_STATUS.get("lastStartedAt"),
+            "lastStoppedAt": CONTENT_BOT_STATUS.get("lastStoppedAt"),
+            "lastErrorAt": CONTENT_BOT_STATUS.get("lastErrorAt"),
+            "lastErrorMessage": CONTENT_BOT_STATUS.get("lastErrorMessage"),
+            "lastResult": CONTENT_BOT_STATUS.get("lastResult"),
+            "enabled": enabled,
+            "facebookPublishBlocked": True,
+            "telegramReviewEnabled": True,
+        }
+
+
+def set_content_bot_status(status: str, message: str = "", result: dict[str, Any] | None = None, error_message: str | None = None) -> dict[str, Any]:
+    now = utc_iso_now()
+    with CONTENT_BOT_LOCK:
+        CONTENT_BOT_STATUS["status"] = status
+        if message:
+            CONTENT_BOT_STATUS["message"] = message
+        if result is not None:
+            CONTENT_BOT_STATUS["lastResult"] = result
+        if status in {"STARTING", "RUNNING"}:
+            CONTENT_BOT_STATUS["lastStartedAt"] = now
+            CONTENT_BOT_STATUS["lastErrorMessage"] = None
+        elif status == "STOPPED":
+            CONTENT_BOT_STATUS["lastStoppedAt"] = now
+            CONTENT_BOT_STATUS["lastErrorMessage"] = None
+        elif status == "ERROR":
+            CONTENT_BOT_STATUS["lastErrorAt"] = now
+            CONTENT_BOT_STATUS["lastErrorMessage"] = (error_message or message or "알 수 없는 오류")[:500]
+        current = CONTENT_BOT_STATUS.get("status") or "STOPPED"
+        return {
+            "status": current,
+            "label": BOT_STATUS_LABELS.get(current, current),
+            "message": CONTENT_BOT_STATUS.get("message") or "",
+            "lastStartedAt": CONTENT_BOT_STATUS.get("lastStartedAt"),
+            "lastStoppedAt": CONTENT_BOT_STATUS.get("lastStoppedAt"),
+            "lastErrorAt": CONTENT_BOT_STATUS.get("lastErrorAt"),
+            "lastErrorMessage": CONTENT_BOT_STATUS.get("lastErrorMessage"),
+            "lastResult": CONTENT_BOT_STATUS.get("lastResult"),
+            "enabled": bot_switch_enabled(CONTENT_BOT_MODULE_KEY, default=current in {"RUNNING", "STARTING"}),
+            "facebookPublishBlocked": True,
+            "telegramReviewEnabled": True,
+        }
+
+
+def telegram_card_preview_metadata(card_preview: dict[str, Any] | None) -> dict[str, Any]:
+    preview = card_preview or {}
+    payload = preview.get("payload") if isinstance(preview.get("payload"), dict) else {}
+    result = {
+        "ok": bool(preview.get("ok")),
+        "status": str(preview.get("status") or ""),
+        "reason": str(preview.get("reason") or "")[:500],
+        "card_required": bool(preview.get("card_required")),
+        "template_type": str(preview.get("template_type") or payload.get("template_type") or ""),
+        "image_name": str(preview.get("image_name") or ""),
+        "image_path": str(preview.get("image_path") or ""),
+    }
+    if payload:
+        result["payload"] = {
+            "template_type": str(payload.get("template_type") or ""),
+            "title": str(payload.get("title") or "")[:180],
+            "subtitle": str(payload.get("subtitle") or "")[:240],
+            "source": str(payload.get("source") or "")[:120],
+            "date": str(payload.get("date") or "")[:20],
+        }
+    return result
+
+
+def send_content_review_to_telegram(candidate: dict[str, Any], dry_run: bool | None = None) -> dict[str, Any]:
+    candidate_id = int(candidate.get("id") or 0)
+    if not content_service().requires_telegram_review(candidate):
+        return {
+            "ok": True,
+            "status": "SKIPPED",
+            "candidate_id": candidate_id,
+            "log_id": None,
+            "message_id": None,
+            "message": "SOCIAL_NEWS는 Telegram 검토 없이 뉴스 봇에서 직접 게시합니다.",
+        }
+    card_preview = content_service().telegram_review_card_preview(candidate)
+    message = content_service().telegram_review_message(candidate, card_preview=card_preview)
+    review_metadata = content_service().telegram_review_metadata(candidate, message)
+    review_metadata["content_card_preview"] = telegram_card_preview_metadata(card_preview)
+    if card_preview.get("card_required") and not card_preview.get("ok"):
+        result = {
+            "ok": False,
+            "description": card_preview.get("reason") or "Content card preview generation failed.",
+            "content_card_preview": telegram_card_preview_metadata(card_preview),
+        }
+        log_id = content_repository().record_telegram_review(
+            candidate_id,
+            str(card_preview.get("status") or "CARD_PREVIEW_FAILED")[:40],
+            True,
+            message,
+            result,
+            review_metadata,
+        )
+        return {
+            "ok": False,
+            "status": card_preview.get("status") or "CARD_PREVIEW_FAILED",
+            "candidate_id": candidate_id,
+            "log_id": log_id,
+            "message_id": None,
+            "content_card_preview": telegram_card_preview_metadata(card_preview),
+            "error_message": card_preview.get("reason") or "Content card preview generation failed.",
+        }
+    duplicate_review = content_repository().find_duplicate_telegram_review(review_metadata)
+    if duplicate_review:
+        suppress_status = (
+            "REVIEW_SUPPRESSED_LOW_VALUE"
+            if review_metadata.get("score_bucket") == "0-39"
+            else "REVIEW_SUPPRESSED_DUPLICATE"
+        )
+        suppress_reason = (
+            "same telegram_review_key or semantic_review_key already reviewed; "
+            f"matched_log_id={duplicate_review.get('id')}"
+        )
+        response = {
+            "ok": True,
+            "suppressed": True,
+            "suppress_reason": suppress_reason,
+            "matched_log_id": duplicate_review.get("id"),
+            "matched_status": duplicate_review.get("status"),
+            "telegram_review_key": review_metadata.get("telegram_review_key"),
+            "semantic_review_key": review_metadata.get("semantic_review_key"),
+            "content_card_preview": telegram_card_preview_metadata(card_preview),
+        }
+        if str(duplicate_review.get("status") or "").startswith("REVIEW_SUPPRESSED"):
+            log_id = int(duplicate_review.get("id") or 0)
+        else:
+            log_id = content_repository().record_telegram_review(
+                candidate_id,
+                suppress_status,
+                True,
+                message,
+                response,
+                review_metadata,
+            )
+        return {
+            "ok": True,
+            "status": suppress_status,
+            "candidate_id": candidate_id,
+            "log_id": log_id,
+            "message_id": None,
+            "suppressed": True,
+            "suppress_reason": suppress_reason,
+            "matched_log_id": duplicate_review.get("id"),
+            "content_card_preview": telegram_card_preview_metadata(card_preview),
+        }
+    token_ready = bool(os.environ.get("TELEGRAM_BOT_TOKEN", "").strip() and telegram_admin_chat_id())
+    dry_run = (not token_ready) if dry_run is None else bool(dry_run)
+    if dry_run:
+        log_id = content_repository().record_telegram_review(
+            candidate_id,
+            "DRY_RUN",
+            True,
+            message,
+            {"ok": True, "dry_run": True, "description": "Telegram token/chat id not configured or dry-run requested."},
+            review_metadata,
+        )
+        return {
+            "ok": True,
+            "status": "DRY_RUN",
+            "candidate_id": candidate_id,
+            "log_id": log_id,
+            "message_id": None,
+            "content_card_preview": telegram_card_preview_metadata(card_preview),
+        }
+
+    reply_markup = {
+            "inline_keyboard": [
+                [
+                    {"text": "90 우선", "callback_data": build_content_score_callback(candidate_id, 90)},
+                    {"text": "75 사용", "callback_data": build_content_score_callback(candidate_id, 75)},
+                ],
+                [
+                    {"text": "60 보류", "callback_data": build_content_score_callback(candidate_id, 60)},
+                    {"text": "40 낮춤", "callback_data": build_content_score_callback(candidate_id, 40)},
+                ],
+            ]
+    }
+    if card_preview.get("ok") and card_preview.get("image_path"):
+        result = telegram_api_multipart(
+            "sendPhoto",
+            {
+                "chat_id": telegram_admin_chat_id(),
+                "caption": message[:1024],
+                "reply_markup": json.dumps(reply_markup, ensure_ascii=False),
+            },
+            "photo",
+            Path(str(card_preview["image_path"])),
+        )
+    else:
+        result = telegram_api(
+            "sendMessage",
+            {
+                "chat_id": telegram_admin_chat_id(),
+                "text": message[:3900],
+                "reply_markup": reply_markup,
+            },
+        )
+    status = "SENT" if result.get("ok") else "FAILED"
+    log_id = content_repository().record_telegram_review(candidate_id, status, False, message, result, review_metadata)
+    return {
+        "ok": bool(result.get("ok")),
+        "status": status,
+        "candidate_id": candidate_id,
+        "log_id": log_id,
+        "message_id": result.get("result", {}).get("message_id"),
+        "content_card_preview": telegram_card_preview_metadata(card_preview),
+        "error_message": "" if result.get("ok") else result.get("description", ""),
+    }
+
+
+def run_content_generation_cycle(limit: int = 5) -> dict[str, Any]:
+    sync = content_service().sync_all(limit=500)
+    targets = content_service().review_targets(limit=limit)
+    deliveries = [send_content_review_to_telegram(candidate) for candidate in targets]
+    sent = sum(1 for item in deliveries if item.get("status") == "SENT")
+    dry_run = sum(1 for item in deliveries if item.get("status") == "DRY_RUN")
+    failed = sum(1 for item in deliveries if item.get("status") == "FAILED")
+    suppressed = sum(1 for item in deliveries if str(item.get("status") or "").startswith("REVIEW_SUPPRESSED"))
+    return {
+        "ok": failed == 0,
+        "sync": sync,
+        "review_target_count": len(targets),
+        "telegram": {
+            "sent": sent,
+            "dry_run": dry_run,
+            "failed": failed,
+            "suppressed": suppressed,
+            "items": deliveries,
+        },
+        "facebook_publish": "BLOCKED_BY_CONTENT_REVIEW",
+    }
+
+
+def run_content_bot_loop() -> None:
+    interval = int(os.environ.get("CONTENT_BOT_INTERVAL_MINUTES", "15") or "15") * 60
+    review_limit = max(1, min(int(os.environ.get("CONTENT_BOT_REVIEW_LIMIT", "5") or "5"), 20))
+    try:
+        set_content_bot_status("RUNNING", "콘텐츠 생성/Telegram 검토 루프 실행 중")
+        write_bot_log("content_bot", "STARTED", "콘텐츠 생성 봇 시작: Facebook 게시 차단, Telegram review 전송")
+        while not CONTENT_BOT_STOP_EVENT.is_set():
+            result = run_content_generation_cycle(limit=review_limit)
+            set_content_bot_status(
+                "RUNNING",
+                f"콘텐츠 동기화 {result.get('sync', {}).get('synced_total', 0)}건 / Telegram 대상 {result.get('review_target_count', 0)}건",
+                result=result,
+            )
+            write_bot_log(
+                "content_bot",
+                "COMPLETED" if result.get("ok") else "FAILED",
+                (
+                    f"콘텐츠 생성 사이클: sync {result.get('sync', {}).get('synced_total', 0)}건, "
+                    f"Telegram sent {result.get('telegram', {}).get('sent', 0)}건, "
+                    f"dry-run {result.get('telegram', {}).get('dry_run', 0)}건, "
+                    f"suppressed {result.get('telegram', {}).get('suppressed', 0)}건"
+                ),
+            )
+            if CONTENT_BOT_STOP_EVENT.wait(max(interval, 60)):
+                break
+        set_content_bot_status("STOPPED", "콘텐츠 생성 봇 중지됨")
+        write_bot_log("content_bot", "STOPPED", "콘텐츠 생성 봇 종료")
+    except Exception as exc:
+        CONTENT_BOT_STOP_EVENT.set()
+        set_content_bot_status("ERROR", "콘텐츠 생성 봇 장애", error_message=str(exc))
+        write_bot_log("content_bot", "FAILED", f"콘텐츠 생성 봇 장애: {str(exc)[:180]}")
+
+
+def start_content_bot() -> dict[str, Any]:
+    global CONTENT_BOT_THREAD
+    set_bot_switch_enabled(CONTENT_BOT_MODULE_KEY, True)
+    if CONTENT_BOT_THREAD and CONTENT_BOT_THREAD.is_alive():
+        return content_bot_status()
+    CONTENT_BOT_STOP_EVENT.clear()
+    set_content_bot_status("STARTING", "콘텐츠 생성 봇 시작 요청")
+    CONTENT_BOT_THREAD = threading.Thread(target=run_content_bot_loop, name="workconnect-content-bot", daemon=True)
+    CONTENT_BOT_THREAD.start()
+    return content_bot_status()
+
+
+def stop_content_bot() -> dict[str, Any]:
+    set_bot_switch_enabled(CONTENT_BOT_MODULE_KEY, False)
+    if CONTENT_BOT_THREAD and CONTENT_BOT_THREAD.is_alive():
+        CONTENT_BOT_STOP_EVENT.set()
+        return set_content_bot_status("STOPPING", "콘텐츠 생성 봇 종료 요청")
+    CONTENT_BOT_STOP_EVENT.set()
+    return set_content_bot_status("STOPPED", "콘텐츠 생성 봇 중지됨")
+
+
 class SingleKeywordNewsCollector:
     def __init__(self, delegate: Any):
         self.delegate = delegate
@@ -537,11 +936,19 @@ def lifestyle_news_collectors() -> list[Any]:
 
 
 def lifestyle_bot_status() -> dict[str, Any]:
-    return one_shot_bot_status(LIFESTYLE_BOT_STATUS, LIFESTYLE_BOT_THREAD, LIFESTYLE_BOT_LOCK)
+    payload = one_shot_bot_status(LIFESTYLE_BOT_STATUS, LIFESTYLE_BOT_THREAD, LIFESTYLE_BOT_LOCK)
+    payload["enabled"] = bot_switch_enabled(LIFESTYLE_BOT_MODULE_KEY, default=False)
+    if payload["enabled"] and payload["status"] == "STOPPED":
+        payload["message"] = payload.get("message") or "생활정보 봇 ON / 다음 수집 대기"
+    return payload
 
 
 def immigration_bot_status() -> dict[str, Any]:
-    return one_shot_bot_status(IMMIGRATION_BOT_STATUS, IMMIGRATION_BOT_THREAD, IMMIGRATION_BOT_LOCK)
+    payload = one_shot_bot_status(IMMIGRATION_BOT_STATUS, IMMIGRATION_BOT_THREAD, IMMIGRATION_BOT_LOCK)
+    payload["enabled"] = bot_switch_enabled(IMMIGRATION_BOT_MODULE_KEY, default=False)
+    if payload["enabled"] and payload["status"] == "STOPPED":
+        payload["message"] = payload.get("message") or "출입국 봇 ON / 다음 수집 대기"
+    return payload
 
 
 def run_lifestyle_bot_once() -> None:
@@ -588,6 +995,7 @@ def run_lifestyle_bot_once() -> None:
 
 def start_lifestyle_bot() -> dict[str, Any]:
     global LIFESTYLE_BOT_THREAD
+    set_bot_switch_enabled(LIFESTYLE_BOT_MODULE_KEY, True)
     if LIFESTYLE_BOT_THREAD and LIFESTYLE_BOT_THREAD.is_alive():
         return lifestyle_bot_status()
     set_one_shot_bot_status(LIFESTYLE_BOT_STATUS, LIFESTYLE_BOT_LOCK, "STARTING", "생활정보 봇 시작 요청")
@@ -597,14 +1005,17 @@ def start_lifestyle_bot() -> dict[str, Any]:
 
 
 def stop_lifestyle_bot() -> dict[str, Any]:
+    set_bot_switch_enabled(LIFESTYLE_BOT_MODULE_KEY, False)
     if LIFESTYLE_BOT_THREAD and LIFESTYLE_BOT_THREAD.is_alive():
-        return set_one_shot_bot_status(
+        set_one_shot_bot_status(
             LIFESTYLE_BOT_STATUS,
             LIFESTYLE_BOT_LOCK,
             "STOPPING",
             "현재 수집 사이클 완료 후 중지됩니다.",
         )
-    return set_one_shot_bot_status(LIFESTYLE_BOT_STATUS, LIFESTYLE_BOT_LOCK, "STOPPED", "생활정보 봇 중지됨")
+        return lifestyle_bot_status()
+    set_one_shot_bot_status(LIFESTYLE_BOT_STATUS, LIFESTYLE_BOT_LOCK, "STOPPED", "생활정보 봇 중지됨")
+    return lifestyle_bot_status()
 
 
 def run_immigration_bot_once() -> None:
@@ -631,6 +1042,7 @@ def run_immigration_bot_once() -> None:
 
 def start_immigration_bot() -> dict[str, Any]:
     global IMMIGRATION_BOT_THREAD
+    set_bot_switch_enabled(IMMIGRATION_BOT_MODULE_KEY, True)
     if IMMIGRATION_BOT_THREAD and IMMIGRATION_BOT_THREAD.is_alive():
         return immigration_bot_status()
     set_one_shot_bot_status(IMMIGRATION_BOT_STATUS, IMMIGRATION_BOT_LOCK, "STARTING", "출입국 봇 시작 요청")
@@ -640,14 +1052,17 @@ def start_immigration_bot() -> dict[str, Any]:
 
 
 def stop_immigration_bot() -> dict[str, Any]:
+    set_bot_switch_enabled(IMMIGRATION_BOT_MODULE_KEY, False)
     if IMMIGRATION_BOT_THREAD and IMMIGRATION_BOT_THREAD.is_alive():
-        return set_one_shot_bot_status(
+        set_one_shot_bot_status(
             IMMIGRATION_BOT_STATUS,
             IMMIGRATION_BOT_LOCK,
             "STOPPING",
             "현재 수집 사이클 완료 후 중지됩니다.",
         )
-    return set_one_shot_bot_status(IMMIGRATION_BOT_STATUS, IMMIGRATION_BOT_LOCK, "STOPPED", "출입국 봇 중지됨")
+        return immigration_bot_status()
+    set_one_shot_bot_status(IMMIGRATION_BOT_STATUS, IMMIGRATION_BOT_LOCK, "STOPPED", "출입국 봇 중지됨")
+    return immigration_bot_status()
 
 
 def job_collector_settings() -> dict[str, Any]:
@@ -784,11 +1199,15 @@ def module_enabled(module_key: str) -> bool:
 
 
 def run_content_publish_cycle() -> dict[str, Any]:
-    if not module_enabled("content.publisher"):
-        return {"ok": True, "status": "DISABLED", "message": "content.publisher is disabled"}
-    sync_result = content_service().sync_all(limit=200)
-    publish_result = content_service().publish_next(dry_run=False)
-    return {"ok": True, "sync": sync_result, "publish": publish_result}
+    if content_bot_status().get("status") != "RUNNING":
+        return {"ok": True, "status": "DISABLED", "message": "content bot is stopped; Facebook publishing is blocked"}
+    review_result = run_content_generation_cycle(limit=5)
+    return {
+        "ok": review_result.get("ok", False),
+        "sync": review_result.get("sync", {}),
+        "review": review_result.get("telegram", {}),
+        "publish": {"status": "BLOCKED", "message": "Facebook auto publish is disabled during Telegram review MVP."},
+    }
 
 
 def immigration_dashboard() -> dict[str, Any]:
@@ -1182,6 +1601,32 @@ def parse_callback_data(data: str) -> tuple[str, int, str] | None:
     return action, session_id, parts[3]
 
 
+def content_score_signature(candidate_id: int, score: int) -> str:
+    secret = callback_secret()
+    if not secret:
+        return ""
+    digest = hmac.new(secret.encode("utf-8"), f"content_score:{candidate_id}:{score}".encode("utf-8"), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")[:12]
+
+
+def build_content_score_callback(candidate_id: int, score: int) -> str:
+    return f"content_score:{candidate_id}:{score}:{content_score_signature(candidate_id, score)}"
+
+
+def parse_content_score_callback(data: str) -> tuple[int, int, str] | None:
+    parts = data.split(":")
+    if len(parts) != 4 or parts[0] != "content_score":
+        return None
+    try:
+        candidate_id = int(parts[1])
+        score = int(parts[2])
+    except ValueError:
+        return None
+    if score < 0 or score > 100:
+        return None
+    return candidate_id, score, parts[3]
+
+
 def verify_callback_secret(handler: BaseHTTPRequestHandler, parsed_url) -> bool:
     secret = os.environ.get("ADMIN_TELEGRAM_CALLBACK_TOKEN", "").strip() or os.environ.get("TELEGRAM_WEBHOOK_SECRET", "").strip()
     if not secret:
@@ -1215,6 +1660,58 @@ def telegram_api(method: str, payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "description": "Telegram 서버에 연결할 수 없습니다."}
     except Exception:
         return {"ok": False, "description": "Telegram 요청 전송에 실패했습니다."}
+
+
+def telegram_api_multipart(method: str, fields: dict[str, Any], file_field: str, file_path: Path) -> dict[str, Any]:
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return {"ok": False, "description": "Telegram Bot Token is not configured."}
+    if not file_path.exists() or not file_path.is_file():
+        return {"ok": False, "description": "Telegram image file is missing."}
+
+    boundary = "----WorkConnectTelegram" + hashlib.sha256(f"{time.time()}:{file_path.name}".encode("utf-8")).hexdigest()[:16]
+    body = bytearray()
+    for key, value in fields.items():
+        if value is None:
+            continue
+        field_value = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"))
+        body.extend(field_value.encode("utf-8"))
+        body.extend(b"\r\n")
+
+    filename = file_path.name.replace('"', "")
+    body.extend(f"--{boundary}\r\n".encode("utf-8"))
+    body.extend(
+        (
+            f'Content-Disposition: form-data; name="{file_field}"; filename="{filename}"\r\n'
+            "Content-Type: image/png\r\n\r\n"
+        ).encode("utf-8")
+    )
+    body.extend(file_path.read_bytes())
+    body.extend(b"\r\n")
+    body.extend(f"--{boundary}--\r\n".encode("utf-8"))
+
+    request = Request(
+        f"https://api.telegram.org/bot{token}/{method}",
+        data=bytes(body),
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8", errors="replace"))
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(detail)
+            return {"ok": False, "description": payload.get("description") or "Telegram multipart request failed."}
+        except json.JSONDecodeError:
+            return {"ok": False, "description": f"Telegram multipart request failed. HTTP {exc.code}"}
+    except URLError:
+        return {"ok": False, "description": "Could not connect to Telegram server."}
+    except Exception:
+        return {"ok": False, "description": "Telegram multipart request failed."}
 
 
 def telegram_admin_chat_id() -> str:
@@ -1308,6 +1805,45 @@ def apply_telegram_auth_callback(callback_query: dict[str, Any]) -> dict[str, An
     }
 
 
+def apply_telegram_content_callback(callback_query: dict[str, Any]) -> dict[str, Any]:
+    data = str(callback_query.get("data") or "")
+    parsed = parse_content_score_callback(data)
+    if not parsed:
+        return {"ok": False, "status": None, "message": "처리할 수 없는 콘텐츠 점수 요청입니다."}
+
+    candidate_id, score, signature = parsed
+    expected = content_score_signature(candidate_id, score)
+    if not expected or not hmac.compare_digest(expected, signature):
+        return {"ok": False, "status": None, "message": "콘텐츠 점수 요청 검증에 실패했습니다."}
+
+    owner_id = telegram_owner_user_id()
+    from_user_id = str((callback_query.get("from") or {}).get("id") or "")
+    if owner_id and from_user_id != owner_id:
+        return {"ok": False, "status": None, "message": "허가되지 않은 Telegram 사용자입니다."}
+
+    candidate = content_service().apply_operator_score(
+        candidate_id,
+        score,
+        comment=f"Telegram operator score {score}",
+    )
+    if not candidate:
+        return {"ok": False, "status": None, "message": "콘텐츠 후보를 찾을 수 없습니다."}
+    return {
+        "ok": True,
+        "status": candidate.get("status"),
+        "candidate_id": candidate_id,
+        "score": score,
+        "message": f"콘텐츠 점수 {score}점이 반영되었습니다.",
+    }
+
+
+def apply_telegram_callback(callback_query: dict[str, Any]) -> dict[str, Any]:
+    data = str(callback_query.get("data") or "")
+    if data.startswith("content_score:"):
+        return apply_telegram_content_callback(callback_query)
+    return apply_telegram_auth_callback(callback_query)
+
+
 def start_telegram_update_poller() -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = telegram_admin_chat_id()
@@ -1329,7 +1865,7 @@ def start_telegram_update_poller() -> None:
                 callback_query = update.get("callback_query")
                 if not callback_query:
                     continue
-                callback_result = apply_telegram_auth_callback(callback_query)
+                callback_result = apply_telegram_callback(callback_query)
                 callback_id = callback_query.get("id")
                 if callback_id:
                     telegram_api(
@@ -2559,6 +3095,8 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"items": log_rows(limit=limit, offset=offset)})
             elif path == "/api/admin/bot/status":
                 self._send_json(format_bot_status(bot_runtime_row()))
+            elif path == "/api/admin/content-bot/status":
+                self._send_json(content_bot_status())
             elif path == "/api/admin/lifestyle-bot/status":
                 self._send_json(lifestyle_bot_status())
             elif path == "/api/admin/immigration-bot/status":
@@ -2634,6 +3172,12 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(stop_bot())
             elif path == "/api/admin/bot/reset-error":
                 self._send_json(reset_bot_error())
+            elif path == "/api/admin/content-bot/start":
+                self._send_json(start_content_bot())
+            elif path == "/api/admin/content-bot/stop":
+                self._send_json(stop_content_bot())
+            elif path == "/api/admin/content-bot/run-once":
+                self._send_json(run_content_generation_cycle(limit=5))
             elif path == "/api/admin/lifestyle-bot/start":
                 self._send_json(start_lifestyle_bot())
             elif path == "/api/admin/lifestyle-bot/stop":
@@ -2671,6 +3215,24 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 limit = int(payload.get("limit") or 200) if isinstance(payload, dict) else 200
                 self._send_json(content_service().sync_all(limit=max(1, min(limit, 1000))))
+            elif path.startswith("/api/admin/content/candidates/") and path.endswith("/send-telegram-review"):
+                raw_id = path.split("/")[-2]
+                candidate = content_candidate_detail(int(raw_id))
+                if not candidate:
+                    self._send_json({"ok": False, "message": "content candidate not found"}, status=404)
+                    return
+                payload = self._read_json()
+                dry_run = None
+                if isinstance(payload, dict) and "dryRun" in payload:
+                    dry_run = bool(payload.get("dryRun"))
+                self._send_json(send_content_review_to_telegram(candidate, dry_run=dry_run))
+            elif path.startswith("/api/admin/content/candidates/") and path.endswith("/score"):
+                raw_id = path.split("/")[-2]
+                payload = self._read_json()
+                score = float(payload.get("score") or 0) if isinstance(payload, dict) else 0
+                comment = str(payload.get("comment") or "Admin content score") if isinstance(payload, dict) else "Admin content score"
+                result = content_service().apply_operator_score(int(raw_id), score, comment=comment)
+                self._send_json({"ok": bool(result), "candidate": result}, status=200 if result else 404)
             elif path.startswith("/api/admin/content/candidates/") and path.endswith("/publish"):
                 raw_id = path.split("/")[-2]
                 payload = self._read_json()
@@ -2897,7 +3459,7 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             return
         payload = self._read_json()
         callback_query = payload.get("callback_query") or payload
-        result = apply_telegram_auth_callback(callback_query)
+        result = apply_telegram_callback(callback_query)
         callback_id = callback_query.get("id")
         if callback_id:
             telegram_api(
@@ -3000,6 +3562,15 @@ def initialize_admin_runtime() -> None:
         start_bot()
     elif row.get("status") == "STOPPING":
         set_bot_status("STOPPED")
+    if bot_switch_enabled(CONTENT_BOT_MODULE_KEY):
+        print("[content-bot] persisted ON switch found; restarting content bot", flush=True)
+        start_content_bot()
+    if bot_switch_enabled(LIFESTYLE_BOT_MODULE_KEY):
+        print("[lifestyle-bot] persisted ON switch found; running startup collection", flush=True)
+        start_lifestyle_bot()
+    if bot_switch_enabled(IMMIGRATION_BOT_MODULE_KEY):
+        print("[immigration-bot] persisted ON switch found; running startup collection", flush=True)
+        start_immigration_bot()
     if job_collector_settings().get("schedulerEnabled"):
         print("[job-collector] persisted scheduler flag found; restarting scheduler", flush=True)
         start_job_scheduler()

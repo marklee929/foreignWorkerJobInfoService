@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, ExternalLink, RefreshCw, Wrench } from '@lucide/vue'
 import Header from '../components/Header.vue'
 import Sidebar from '../components/Sidebar.vue'
+import StatusBadge from '../components/StatusBadge.vue'
 import { navItems } from '../data/defaultAdminState'
 import { cleanupCandidateLinks, fetchCandidateDetail } from '../services/apiClient'
 import { logoutAdmin, resetDeviceId } from '../services/authService'
@@ -39,39 +40,6 @@ function formatDate(value) {
 
 function formatScore(value) {
   return Number(value || 0).toFixed(2)
-}
-
-function statusLabel(status) {
-  const map = {
-    RAW: '원본',
-    CANDIDATE: '후보',
-    COLLECTED: '수집',
-    NORMALIZED: '정규화',
-    SUMMARIZED: '요약완료',
-    SCORED: '점수평가',
-    READY_TO_PUBLISH: '게시대기',
-    READY_TO_REVIEW: '검토대기',
-    REVIEW_REQUIRED: '검토필요',
-    AUTO_RETRY_BLOCKED: '재시막힘',
-    FAILED_REPOST_REQUIRED: '재게시',
-    FAILED_PERMISSION: '권한확인',
-    FAILED_RETRYABLE: '재시도',
-    FAILED: '실패',
-    PUBLISHED: '게시완료',
-    DRY_RUN_PUBLISHED: '테스트',
-    NOTIFIED: '알림완료',
-    DRY_RUN_NOTIFIED: '테스트',
-    DUPLICATE: '중복제외',
-    DUPLICATE_SKIPPED: '중복제외',
-    TEXT_INVALID: '본문오류',
-    SKIPPED: '제외',
-    SKIPPED_LOW_SCORE: '점수미달',
-    POSTED: '게시완료',
-    POST_EXPIRED: '게시만료',
-    SKIPPED_DAILY_RESET: '일일만료',
-    ARCHIVED: '보관',
-  }
-  return map[status] || (status ? '기타상태' : '-')
 }
 
 function parseJson(value) {
@@ -172,7 +140,7 @@ onMounted(loadDetail)
           <img v-if="imageUrls.length" class="h-[280px] w-full object-cover" :src="imageUrls[0]" alt="" />
           <div class="space-y-md p-lg">
             <div class="flex flex-wrap items-center gap-sm text-body-sm">
-              <span class="rounded bg-surface-container px-sm py-[2px] font-bold">{{ statusLabel(candidate.publish_status || candidate.status) }}</span>
+              <StatusBadge :code="candidate.publish_status || candidate.status" />
               <span class="font-mono text-success">점수 {{ formatScore(candidate.evaluation_score) }}</span>
               <span class="text-on-surface-variant">{{ candidate.publisher_name || candidate.source_name || candidate.source_type || '-' }}</span>
               <span class="text-on-surface-variant">최종 수집 {{ formatDate(candidate.last_seen_at || candidate.collected_at) }}</span>
@@ -223,7 +191,7 @@ onMounted(loadDetail)
               <div v-for="item in groupItems" :key="item.id" class="rounded border border-outline-variant p-sm text-body-sm">
                 <div class="mb-xs flex flex-wrap items-center gap-sm">
                   <span v-if="item.is_representative" class="rounded bg-primary-container px-sm py-[2px] font-bold text-primary">대표</span>
-                  <span class="rounded bg-surface-container px-sm py-[2px] font-bold">{{ statusLabel(item.publish_status || item.status) }}</span>
+                  <StatusBadge :code="item.publish_status || item.status" />
                   <span class="font-mono text-success">{{ formatScore(item.evaluation_score) }}</span>
                   <span class="text-on-surface-variant">최종 {{ formatDate(item.last_seen_at || item.collected_at) }}</span>
                   <span class="text-on-surface-variant">최초 {{ formatDate(item.collected_at) }}</span>

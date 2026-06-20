@@ -46,6 +46,7 @@ class ContentRepository:
                         COUNT(*) FILTER (WHERE status = 'POSTED')::int,
                         COUNT(*) FILTER (WHERE status = 'FAILED_RETRYABLE')::int,
                         COUNT(*) FILTER (WHERE source_domain = 'SOCIAL_NEWS')::int,
+                        COUNT(*) FILTER (WHERE source_domain = 'LIVING_INFO')::int,
                         COUNT(*) FILTER (WHERE source_domain = 'IMMIGRATION_INFO')::int,
                         MAX(updated_at)
                     FROM content.content_candidate
@@ -70,8 +71,9 @@ class ContentRepository:
             "posted_count": counts[3] if counts else 0,
             "failed_retryable_count": counts[4] if counts else 0,
             "social_news_count": counts[5] if counts else 0,
-            "immigration_count": counts[6] if counts else 0,
-            "latest_updated_at": counts[7].isoformat() if counts and counts[7] else "",
+            "living_info_count": counts[6] if counts else 0,
+            "immigration_count": counts[7] if counts else 0,
+            "latest_updated_at": counts[8].isoformat() if counts and counts[8] else "",
             "groups": [
                 {"source_domain": row[0], "content_type": row[1], "status": row[2], "count": row[3]}
                 for row in groups
@@ -195,6 +197,221 @@ class ContentRepository:
                 row = cur.fetchone()
         return row[0] if row else None
 
+    def list_review_targets(self, limit: int = 5) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 5), 20))
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id
+                    FROM content.content_candidate candidate
+                    WHERE candidate.status IN ('SCORED', 'READY_TO_REVIEW', 'READY_TO_PUBLISH', 'FAILED_RETRYABLE')
+                      AND candidate.source_domain IN ('LIVING_INFO', 'IMMIGRATION_INFO')
+                      AND candidate.status <> 'ARCHIVED'
+                      AND candidate.status <> 'POSTED'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM content.publish_log log
+                          WHERE log.content_candidate_id = candidate.id
+                            AND log.channel = 'telegram_review'
+                            AND log.status IN ('SENT', 'DRY_RUN')
+                            AND log.created_at >= CURRENT_TIMESTAMP - INTERVAL '6 hours'
+                      )
+                    ORDER BY
+                        CASE candidate.status
+                            WHEN 'READY_TO_REVIEW' THEN 0
+                            WHEN 'FAILED_RETRYABLE' THEN 1
+                            WHEN 'READY_TO_PUBLISH' THEN 2
+                            ELSE 3
+                        END,
+                        candidate.final_publish_score DESC,
+                        COALESCE(candidate.original_collected_at, candidate.updated_at) DESC,
+                        candidate.id DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                ids = [int(row[0]) for row in cur.fetchall()]
+        return [candidate for candidate in (self.get_candidate(item_id) for item_id in ids) if candidate]
+
+    def find_duplicate_telegram_review(self, review_metadata: dict[str, Any]) -> dict[str, Any]:
+        review_key = str(review_metadata.get("telegram_review_key") or "")
+        semantic_key = str(review_metadata.get("semantic_review_key") or "")
+        candidate_id = int(review_metadata.get("content_candidate_id") or 0)
+        message_preview = str(review_metadata.get("message_preview") or "")
+        if not review_key and not semantic_key and not candidate_id:
+            return {}
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, content_candidate_id, status, dry_run, request_payload, created_at
+                    FROM content.publish_log
+                    WHERE channel = 'telegram_review'
+                      AND status IN (
+                          'SENT', 'DRY_RUN', 'REVIEW_SENT',
+                          'REVIEW_SUPPRESSED_DUPLICATE',
+                          'REVIEW_SUPPRESSED_LOW_VALUE'
+                      )
+                      AND (
+                          (request_payload ->> 'telegram_review_key') = %s
+                          OR (%s <> '' AND (request_payload ->> 'semantic_review_key') = %s)
+                          OR (
+                              %s > 0
+                              AND content_candidate_id = %s
+                              AND message_preview = %s
+                              AND created_at >= CURRENT_TIMESTAMP - INTERVAL '6 hours'
+                          )
+                      )
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (review_key, semantic_key, semantic_key, candidate_id, candidate_id, message_preview[:500]),
+                )
+                row = cur.fetchone()
+        if not row:
+            return {}
+        return {
+            "id": int(row[0]),
+            "content_candidate_id": int(row[1]),
+            "status": row[2],
+            "dry_run": bool(row[3]),
+            "request_payload": row[4] or {},
+            "created_at": row[5].isoformat() if row[5] else "",
+        }
+
+    def record_telegram_review(
+        self,
+        candidate_id: int,
+        status: str,
+        dry_run: bool,
+        message: str,
+        response: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> int:
+        request_payload = {"message": message}
+        if metadata:
+            request_payload.update(metadata)
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO content.publish_log(
+                        content_candidate_id, channel, status, dry_run, message_preview,
+                        link_url, error_code, error_message, request_payload, response_payload
+                    )
+                    VALUES (%s, 'telegram_review', %s, %s, %s, '', %s, %s, %s::jsonb, %s::jsonb)
+                    RETURNING id
+                    """,
+                    (
+                        candidate_id,
+                        status,
+                        dry_run,
+                        message[:500],
+                        str((response or {}).get("error_code") or ""),
+                        str((response or {}).get("description") or (response or {}).get("error_message") or ""),
+                        json.dumps(request_payload, ensure_ascii=False),
+                        json.dumps(response or {}, ensure_ascii=False),
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return int(row[0]) if row else 0
+
+    def apply_operator_score(self, candidate_id: int, score: float, comment: str = "") -> dict[str, Any]:
+        bounded_score = max(0.0, min(100.0, float(score or 0)))
+        next_status = "READY_TO_PUBLISH" if bounded_score >= 70 else "READY_TO_REVIEW"
+        review_reason = comment or f"Telegram operator score: {bounded_score:.0f}"
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE content.content_candidate
+                    SET final_publish_score = GREATEST(final_publish_score, %s),
+                        quality_score = GREATEST(quality_score, %s),
+                        content_potential_score = GREATEST(content_potential_score, %s),
+                        review_required_yn = %s,
+                        review_reason = %s,
+                        status = CASE
+                            WHEN status IN ('POSTED', 'ARCHIVED') THEN status
+                            ELSE %s
+                        END,
+                        raw_payload = raw_payload || jsonb_build_object(
+                            'operator_score', %s,
+                            'operator_score_comment', %s,
+                            'operator_scored_at', CURRENT_TIMESTAMP
+                        ),
+                        updated_at = CURRENT_TIMESTAMP,
+                        content_updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                    RETURNING id, raw_ref_table, raw_ref_id, status
+                    """,
+                    (
+                        bounded_score,
+                        bounded_score,
+                        bounded_score,
+                        bounded_score < 70,
+                        review_reason,
+                        next_status,
+                        bounded_score,
+                        review_reason,
+                        candidate_id,
+                    ),
+                )
+                row = cur.fetchone()
+                if row and row[1] == "social_news.candidate":
+                    cur.execute(
+                        """
+                        UPDATE social_news.candidate
+                        SET evaluation_score = GREATEST(COALESCE(evaluation_score, 0), %s),
+                            publish_status = CASE
+                                WHEN %s >= 70 AND COALESCE(publish_status, status, '') NOT IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED')
+                                THEN 'READY_TO_PUBLISH'
+                                ELSE publish_status
+                            END,
+                            status = CASE
+                                WHEN %s >= 70 AND COALESCE(status, '') NOT IN ('POSTED', 'PUBLISHED', 'NOTIFIED', 'DRY_RUN_PUBLISHED', 'DRY_RUN_NOTIFIED')
+                                THEN 'READY_TO_PUBLISH'
+                                ELSE status
+                            END,
+                            review_required_reason = CASE WHEN %s < 70 THEN %s ELSE review_required_reason END,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = %s
+                        """,
+                        (bounded_score, bounded_score, bounded_score, bounded_score, review_reason, int(row[2])),
+                    )
+                elif row and row[1] == "immigration_info.official_notice":
+                    cur.execute(
+                        """
+                        UPDATE immigration_info.official_notice
+                        SET importance_score = GREATEST(COALESCE(importance_score, 0), %s),
+                            content_status = CASE
+                                WHEN %s >= 70 AND COALESCE(content_status, '') <> 'POSTED' THEN 'READY_TO_PUBLISH'
+                                WHEN COALESCE(content_status, '') <> 'POSTED' THEN 'READY_TO_REVIEW'
+                                ELSE content_status
+                            END,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = %s
+                        """,
+                        (bounded_score, bounded_score, int(row[2])),
+                    )
+                cur.execute(
+                    """
+                    INSERT INTO content.publish_log(
+                        content_candidate_id, channel, status, dry_run, message_preview,
+                        link_url, error_code, error_message, request_payload, response_payload
+                    )
+                    VALUES (%s, 'telegram_review', 'SCORED', TRUE, %s, '', '', '', %s::jsonb, '{}'::jsonb)
+                    """,
+                    (
+                        candidate_id,
+                        review_reason[:500],
+                        json.dumps({"operator_score": bounded_score, "comment": review_reason}, ensure_ascii=False),
+                    ),
+                )
+            conn.commit()
+        return self.get_candidate(candidate_id)
+
     def upsert_candidate(self, payload: dict[str, Any]) -> int:
         with connect() as conn:
             with conn.cursor() as cur:
@@ -280,6 +497,62 @@ class ContentRepository:
                 row = cur.fetchone()
             conn.commit()
         return int(row[0]) if row else 0
+
+    def mark_candidate_quality_blocked(self, candidate_id: int, gate_payload: dict[str, Any]) -> dict[str, Any]:
+        code = str(gate_payload.get("content_quality_gate_code") or "BLOCKED_LOW_USER_NEED")
+        reason = str(gate_payload.get("content_quality_gate_reason") or code)
+        hard_block = bool(gate_payload.get("hard_block_yn", False))
+        score_cap = 0.0 if hard_block else 39.0
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE content.content_candidate
+                    SET status = CASE
+                            WHEN status IN ('POSTED', 'ARCHIVED') THEN status
+                            ELSE 'SCORED'
+                        END,
+                        final_publish_score = LEAST(final_publish_score, %s),
+                        quality_score = LEAST(quality_score, %s),
+                        content_potential_score = LEAST(content_potential_score, %s),
+                        review_required_yn = FALSE,
+                        sensitive_yn = FALSE,
+                        review_reason = %s,
+                        raw_payload = raw_payload || %s::jsonb,
+                        updated_at = CURRENT_TIMESTAMP,
+                        content_updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                    RETURNING id, status
+                    """,
+                    (
+                        score_cap,
+                        score_cap,
+                        score_cap,
+                        f"{code}: {reason}"[:500],
+                        json.dumps(gate_payload, ensure_ascii=False),
+                        candidate_id,
+                    ),
+                )
+                row = cur.fetchone()
+                cur.execute(
+                    """
+                    INSERT INTO content.publish_log(
+                        content_candidate_id, channel, status, dry_run, message_preview,
+                        link_url, error_code, error_message, request_payload, response_payload
+                    )
+                    VALUES (%s, 'content_gate', %s, TRUE, %s, '', %s, %s, %s::jsonb, '{}'::jsonb)
+                    """,
+                    (
+                        candidate_id,
+                        code[:40],
+                        reason[:500],
+                        code,
+                        reason,
+                        json.dumps(gate_payload, ensure_ascii=False),
+                    ),
+                )
+            conn.commit()
+        return {"ok": bool(row), "id": candidate_id, "status": row[1] if row else ""}
 
     def update_publish_result(self, candidate_id: int, result: dict[str, Any], dry_run: bool) -> dict[str, Any]:
         status = "POSTED" if result.get("status") in {"OK", "POSTED", "PUBLISHED"} else "FAILED_RETRYABLE"
