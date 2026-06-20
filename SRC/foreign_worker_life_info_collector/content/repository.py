@@ -780,4 +780,36 @@ def publish_log_row(row: tuple) -> dict[str, Any]:
     )
     result = dict(zip(keys, row))
     result["created_at"] = result["created_at"].isoformat() if result.get("created_at") else ""
+    result["content_card_preview"] = extract_content_card_preview(result)
     return result
+
+
+def coerce_json_payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def extract_content_card_preview(log: dict[str, Any]) -> dict[str, Any] | None:
+    request_payload = coerce_json_payload(log.get("request_payload"))
+    response_payload = coerce_json_payload(log.get("response_payload"))
+    preview = request_payload.get("content_card_preview") or response_payload.get("content_card_preview")
+    if not isinstance(preview, dict):
+        return None
+    payload = preview.get("payload") if isinstance(preview.get("payload"), dict) else {}
+    return {
+        "ok": bool(preview.get("ok")),
+        "status": str(preview.get("status") or ""),
+        "reason": str(preview.get("reason") or ""),
+        "card_required": bool(preview.get("card_required")),
+        "template_type": str(preview.get("template_type") or payload.get("template_type") or ""),
+        "image_name": str(preview.get("image_name") or ""),
+        "image_path": str(preview.get("image_path") or ""),
+        "payload": payload,
+    }

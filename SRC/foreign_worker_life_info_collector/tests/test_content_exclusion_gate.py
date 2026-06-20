@@ -143,6 +143,68 @@ class ContentExclusionGateTest(unittest.TestCase):
         self.assertEqual(decision.code, "REVIEW_ELIGIBLE")
         self.assertTrue(decision.review_eligible)
 
+    def test_zip_only_official_notice_is_evidence_only(self) -> None:
+        item = candidate(
+            source_domain="IMMIGRATION_INFO",
+            content_type="IMMIGRATION_NOTICE",
+            priority_group="OFFICIAL_NOTICE",
+            category="EMPLOYMENT_POLICY",
+            title="K-New Deal Academy training notice",
+            summary_en="Attached file exists.",
+            why_it_matters_en="",
+            body_en="Attachment exists.",
+            link_url="https://www.moel.go.kr/common/downloadAllZip.do?bbs_seq=19547&bbs_id=12",
+            source_url="https://www.moel.go.kr/common/downloadAllZip.do?bbs_seq=19547&bbs_id=12",
+            source_name="MOEL Foreign Employment Notice",
+            final_publish_score=82,
+            quality_score=82,
+            status="READY_TO_REVIEW",
+            raw_payload={
+                "raw_response": {
+                    "attachment_filename": "19547_20260621012124.zip",
+                    "attachment_size": "120 KB",
+                }
+            },
+        )
+
+        decision = content_quality_gate(item)
+        payload = apply_content_quality_gate(item)
+
+        self.assertEqual(decision.code, "ATTACHMENT_REVIEW_REQUIRED")
+        self.assertFalse(decision.review_eligible)
+        self.assertFalse(decision.publish_eligible)
+        self.assertFalse(ContentService(repository=FakeRepository()).requires_telegram_review(payload))
+        self.assertEqual(payload["status"], "SCORED")
+        self.assertEqual(payload["content_type"], "DOCUMENT_EXTRACTION_REQUIRED")
+        self.assertEqual(payload["priority_group"], "EVIDENCE_ONLY")
+        self.assertLessEqual(payload["final_publish_score"], 39.0)
+        self.assertEqual(payload["raw_payload"]["attachment_review_state"], "ATTACHMENT_REVIEW_REQUIRED")
+        self.assertEqual(payload["raw_payload"]["classification_status"], "CLASSIFICATION_PENDING")
+
+    def test_attachment_only_review_message_has_no_facebook_preview(self) -> None:
+        item = candidate(
+            id=77,
+            source_domain="IMMIGRATION_INFO",
+            content_type="IMMIGRATION_NOTICE",
+            priority_group="OFFICIAL_NOTICE",
+            title="Small business support attachment notice",
+            summary_en="Attachment exists.",
+            body_en="Attachment exists.",
+            link_url="https://www.moel.go.kr/common/downloadAllZip.do?bbs_seq=19548&bbs_id=12",
+            source_url="https://www.moel.go.kr/common/downloadAllZip.do?bbs_seq=19548&bbs_id=12",
+            source_name="MOEL",
+            raw_payload={"raw_response": {"attachment_filename": "notice.zip", "attachment_size": "88 KB"}},
+        )
+
+        message = ContentService(repository=FakeRepository()).telegram_review_message(item)
+
+        self.assertIn("[Content Review - Evidence Only]", message)
+        self.assertIn("attachment_content_not_inspected", message)
+        self.assertIn("bbs_seq: 19548", message)
+        self.assertIn("notice.zip", message)
+        self.assertNotIn("[Facebook Format Preview]", message)
+        self.assertNotIn("#KoreaJobs", message)
+
     def test_system_text_is_blocked_and_payload_is_downgraded(self) -> None:
         payload = apply_content_quality_gate(
             candidate(

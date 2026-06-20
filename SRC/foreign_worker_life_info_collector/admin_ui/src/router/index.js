@@ -8,6 +8,7 @@ import ImmigrationNoticePage from '../views/ImmigrationNoticePage.vue'
 import JobCollectorPage from '../views/JobCollectorPage.vue'
 import LifestyleInfoPage from '../views/LifestyleInfoPage.vue'
 import NewsDetail from '../views/NewsDetail.vue'
+import OperationLogPage from '../views/OperationLogPage.vue'
 import SectionPage from '../views/SectionPage.vue'
 import { checkAdminAuth } from '../services/authService'
 
@@ -41,12 +42,14 @@ const router = createRouter({
       component: SectionPage,
       meta: { requiresAuth: true, title: '데이터 품질', description: '데이터 품질 화면은 별도 정리 예정입니다.', dataView: false },
     },
+    { path: '/system-settings', redirect: '/system-settings/code-guide' },
     {
-      path: '/system-settings',
+      path: '/system-settings/code-guide',
       name: 'system-settings',
       component: SectionPage,
       meta: { requiresAuth: true, title: '시스템 설정', description: '시스템 설정 화면은 별도 정리 예정입니다.', dataView: false },
     },
+    { path: '/system-settings/logs', name: 'operation-logs', component: OperationLogPage, meta: { requiresAuth: true } },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })

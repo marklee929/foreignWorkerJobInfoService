@@ -120,6 +120,108 @@ class ContentCardGeneratorTest(unittest.TestCase):
         self.assertFalse(result["card_required"])
         self.assertEqual(result["reason"], "CARD_BLOCKED_ZERO_SCORE")
 
+    def test_social_news_living_candidate_without_topic_evidence_is_not_card_ready(self) -> None:
+        result = build_content_card_preview(
+            candidate(
+                raw_ref_table="social_news.candidate",
+                link_url="https://example.com/living/news-1",
+                source_url="https://example.com/living/news-1",
+            )
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["card_required"])
+        self.assertEqual(result["status"], "CARD_NOT_READY")
+        self.assertEqual(result["reason"], "single_news_public_card_not_ready")
+
+    def test_social_news_living_candidate_with_topic_evidence_can_render(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = build_content_card_preview(
+                candidate(
+                    raw_ref_table="social_news.candidate",
+                    raw_payload={"topic_key": "housing_deposit_basics"},
+                    card_bullets=[
+                        "Check the registered owner before sending deposit money.",
+                        "Keep bank transfer records and written repair terms.",
+                        "Ask a local support center before signing unclear terms.",
+                    ],
+                ),
+                Path(tmp),
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "CARD_PREVIEW_GENERATED")
+
+    def test_bullet_equal_to_title_is_rejected(self) -> None:
+        result = build_content_card_preview(
+            candidate(
+                card_bullets=[
+                    "Housing Deposit Guide in Korea",
+                    "Keep bank transfer records before signing the contract.",
+                    "Ask a local support center about unclear repair terms.",
+                ]
+            )
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["card_required"])
+        self.assertEqual(result["status"], "CARD_POINT_TITLE_ECHO")
+
+    def test_source_only_bullet_is_rejected(self) -> None:
+        result = build_content_card_preview(
+            candidate(
+                card_bullets=[
+                    "Source: Local support center",
+                    "Keep bank transfer records before signing the contract.",
+                    "Ask a local support center about unclear repair terms.",
+                ]
+            )
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["card_required"])
+        self.assertEqual(result["status"], "CARD_POINT_SOURCE_ECHO")
+
+    def test_url_bullet_is_rejected(self) -> None:
+        result = build_content_card_preview(
+            candidate(
+                card_bullets=[
+                    "Check https://example.com before signing a housing contract.",
+                    "Keep bank transfer records before signing the contract.",
+                    "Ask a local support center about unclear repair terms.",
+                ]
+            )
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["card_required"])
+        self.assertEqual(result["status"], "CARD_POINT_URL_ECHO")
+
+    def test_one_valid_bullet_blocks_card_generation(self) -> None:
+        result = build_content_card_preview(
+            candidate(
+                summary_en="Keep bank transfer records before signing the contract.",
+                why_it_matters_en="",
+                body_en="",
+            )
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["card_required"])
+        self.assertEqual(result["status"], "INSUFFICIENT_VALID_CARD_POINTS")
+
+    def test_footer_uses_brand_not_facebook_or_source_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = build_content_card_preview(
+                candidate(footer_url="https://www.facebook.com/profile.php?id=61581518066485"),
+                Path(tmp),
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["payload"]["footer_url"], "WORK CONNECT KOREA")
+        self.assertNotIn("facebook.com", result["payload"]["footer_url"].lower())
+        self.assertNotIn("http", result["payload"]["footer_url"].lower())
+
 
 if __name__ == "__main__":
     unittest.main()

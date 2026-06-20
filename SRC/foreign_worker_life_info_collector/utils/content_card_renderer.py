@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,7 +19,8 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_DIR = PACKAGE_ROOT / "assets" / "templates" / "content_cards"
 CONFIG_PATH = TEMPLATE_DIR / "content_card_templates.json"
 DEFAULT_OUTPUT_DIR = PACKAGE_ROOT / "storage" / "cache" / "content_cards"
-DEFAULT_FOOTER_URL = "https://www.facebook.com/profile.php?id=61581518066485"
+DEFAULT_FOOTER_TEXT = "WORK CONNECT KOREA"
+DEFAULT_FOOTER_URL = DEFAULT_FOOTER_TEXT
 OUTPUT_SIZE = (1080, 1080)
 MIN_FONT_SIZE = 22
 TEXT_COLOR = "#0f172a"
@@ -54,6 +54,18 @@ BYPASS_CARD_QUALITY_CODES = {
     "WATCH_TOPIC_ONLY",
 }
 BULLET_MAX_CHARS = 80
+MIN_VALID_BULLETS = 3
+CARD_TEXT_REVIEW_ONLY_CODES = {
+    "CARD_NOT_READY",
+    "CARD_POINT_TITLE_ECHO",
+    "CARD_POINT_SOURCE_ECHO",
+    "CARD_POINT_URL_ECHO",
+    "CARD_POINT_DUPLICATE",
+    "CARD_POINT_TOO_SHORT",
+    "CARD_POINT_GENERIC_LABEL",
+    "CARD_POINT_FORBIDDEN_SYSTEM_TEXT",
+    "INSUFFICIENT_VALID_CARD_POINTS",
+}
 
 FORBIDDEN_CARD_TEXT = (
     "저장된 기사 본문이 없습니다",
@@ -69,6 +81,8 @@ FORBIDDEN_CARD_TEXT = (
     "queue",
     "threshold",
     "publish_status",
+    "publish",
+    "diagnostic",
     "facebook 게시를 시도",
     "즉시 facebook",
     "no article body was saved",
@@ -94,13 +108,24 @@ class CardRenderFailure(Exception):
     reason: str
 
     def as_result(self, template_type: str = "") -> dict[str, Any]:
-        return {"ok": False, "status": self.code, "reason": self.reason, "template_type": template_type, "card_required": True}
+        return {
+            "ok": False,
+            "status": self.code,
+            "reason": self.reason,
+            "template_type": template_type,
+            "card_required": self.code not in CARD_TEXT_REVIEW_ONLY_CODES,
+        }
 
 
 def build_content_card_preview(candidate: dict[str, Any], output_dir: Path | None = None) -> dict[str, Any]:
     target = card_generation_target(candidate)
     if not target["eligible"]:
-        return {"ok": False, "status": "CARD_NOT_REQUIRED", "reason": target["reason"], "card_required": False}
+        return {
+            "ok": False,
+            "status": target.get("status", "CARD_NOT_REQUIRED"),
+            "reason": target["reason"],
+            "card_required": bool(target.get("card_required", False)),
+        }
     template_type = select_template_type(candidate)
     try:
         payload = build_content_card_payload(candidate, template_type)
@@ -134,6 +159,13 @@ def card_generation_target(candidate: dict[str, Any]) -> dict[str, Any]:
         return {"eligible": False, "reason": quality_code}
     if content_type in NEWS_LINK_TYPES and valid_link(link_url):
         return {"eligible": False, "reason": "NEWS_ARTICLE_LINK_PREVIEW_USES_OG"}
+    if is_single_living_source_without_topic_evidence(candidate):
+        return {
+            "eligible": False,
+            "status": "CARD_NOT_READY",
+            "reason": "single_news_public_card_not_ready",
+            "card_required": False,
+        }
     if content_format in CARD_FORMATS:
         return {"eligible": True, "reason": "content_format"}
     if asset_policy == TEMPLATE_POLICY:
@@ -152,14 +184,10 @@ def build_content_card_payload(candidate: dict[str, Any], template_type: str) ->
 
     title = clean(candidate.get("card_title") or candidate.get("title") or candidate.get("original_title"))
     subtitle = card_subtitle(candidate)
-    bullets = card_bullets(candidate)
     source = card_source(candidate)
+    bullets = card_bullets(candidate, title=title, source=source)
     date = card_date(candidate)
-    footer_url = clean(
-        candidate.get("footer_url")
-        or os.getenv("WORKCONNECT_CONTENT_CARD_FOOTER_URL", "").strip()
-        or DEFAULT_FOOTER_URL
-    )
+    footer_url = card_footer(candidate)
     payload = {
         "template_type": template_type,
         "title": title,
@@ -304,7 +332,7 @@ def select_template_type(candidate: dict[str, Any]) -> str:
     return "LIVING_IN_KOREA"
 
 
-def card_bullets(candidate: dict[str, Any]) -> list[str]:
+def card_bullets(candidate: dict[str, Any], title: str = "", source: str = "") -> list[str]:
     raw_bullets = candidate.get("card_bullets")
     if isinstance(raw_bullets, list):
         bullets = [clean(item) for item in raw_bullets if clean(item)]
@@ -317,17 +345,29 @@ def card_bullets(candidate: dict[str, Any]) -> list[str]:
         why = clean(candidate.get("why_it_matters_en"))
         bullets.extend(split_sentences(why))
     result: list[str] = []
+    rejected: list[str] = []
+    seen: set[str] = set()
     for bullet in bullets:
         prepared = compact_card_text(bullet, BULLET_MAX_CHARS) if compact else bullet
-        if prepared and prepared not in result:
-            result.append(prepared)
-        if len(result) == 3:
+        if not prepared:
+            continue
+        if len(prepared) > BULLET_MAX_CHARS:
+            raise CardRenderFailure("CARD_TEXT_OVERFLOW", f"Bullet is too long for card rendering: {prepared[:80]}")
+        reason = invalid_card_point_reason(prepared, title=title, source=source, candidate=candidate)
+        if reason:
+            rejected.append(reason)
+            continue
+        normalized = normalized_card_point(prepared)
+        if normalized in seen:
+            rejected.append("CARD_POINT_DUPLICATE")
+            continue
+        seen.add(normalized)
+        result.append(prepared)
+        if len(result) == MIN_VALID_BULLETS:
             break
-    if not result:
-        raise CardRenderFailure("CARD_TEXT_MISSING", "Card bullets are missing.")
-    for bullet in result:
-        if len(bullet) > BULLET_MAX_CHARS:
-            raise CardRenderFailure("CARD_TEXT_OVERFLOW", f"Bullet is too long for card rendering: {bullet[:80]}")
+    if len(result) < MIN_VALID_BULLETS:
+        code = rejected[0] if rejected else "INSUFFICIENT_VALID_CARD_POINTS"
+        raise CardRenderFailure(code, f"Card requires at least {MIN_VALID_BULLETS} validated points before image generation.")
     return result
 
 
@@ -377,6 +417,8 @@ def validate_card_payload(payload: dict[str, Any]) -> None:
         raise CardRenderFailure("CARD_TEXT_MISSING", "Card subtitle is missing.")
     if not payload.get("bullets"):
         raise CardRenderFailure("CARD_TEXT_MISSING", "Card bullets are missing.")
+    if len(payload.get("bullets", [])) < MIN_VALID_BULLETS:
+        raise CardRenderFailure("INSUFFICIENT_VALID_CARD_POINTS", "Card requires at least 3 validated points before image generation.")
     text_fields = [
         clean(payload.get("title")),
         clean(payload.get("subtitle")),
@@ -390,6 +432,8 @@ def validate_card_payload(payload: dict[str, Any]) -> None:
         raise CardRenderFailure("CARD_TEXT_FORBIDDEN_SYSTEM_TEXT", "Card text contains system or operation wording.")
     if contains_non_english_public_text(joined):
         raise CardRenderFailure("CARD_TEXT_INVALID_LANGUAGE", "Card text must be English-only.")
+    if contains_url(clean(payload.get("footer_url"))):
+        raise CardRenderFailure("CARD_FOOTER_URL_FORBIDDEN", "Card footer must not contain a URL.")
 
 
 def contains_forbidden_text(value: str) -> bool:
@@ -422,6 +466,94 @@ def card_date(candidate: dict[str, Any]) -> str:
             if match:
                 return match.group(0)
     return datetime.now(timezone.utc).date().isoformat()
+
+
+def card_footer(candidate: dict[str, Any]) -> str:
+    raw_payload = candidate.get("raw_payload") if isinstance(candidate.get("raw_payload"), dict) else {}
+    requested = clean(candidate.get("footer_text") or raw_payload.get("footer_text"))
+    if requested and not contains_url(requested) and not contains_forbidden_text(requested) and not contains_non_english_public_text(requested):
+        return requested[:80]
+    return DEFAULT_FOOTER_TEXT
+
+
+def is_single_living_source_without_topic_evidence(candidate: dict[str, Any]) -> bool:
+    source_domain = clean(candidate.get("source_domain")).upper()
+    content_type = clean(candidate.get("content_type")).upper()
+    if source_domain != "LIVING_INFO" and content_type != "LIVING_GUIDE":
+        return False
+    if has_topic_or_fact_evidence(candidate):
+        return False
+    raw_payload = candidate.get("raw_payload") if isinstance(candidate.get("raw_payload"), dict) else {}
+    raw_ref_table = clean(candidate.get("raw_ref_table") or raw_payload.get("raw_ref_table")).lower()
+    if raw_ref_table.startswith("social_news."):
+        return True
+    source_kind = clean(raw_payload.get("source_kind") or raw_payload.get("source_role") or raw_payload.get("content_origin")).lower()
+    if source_kind in {"news", "article", "source_signal", "evidence", "single_source"}:
+        return True
+    return False
+
+
+def has_topic_or_fact_evidence(candidate: dict[str, Any]) -> bool:
+    raw_payload = candidate.get("raw_payload") if isinstance(candidate.get("raw_payload"), dict) else {}
+    for key in ("topic_key", "topic_cluster_id", "fact_point_id", "card_point_id"):
+        if clean(candidate.get(key) or raw_payload.get(key)):
+            return True
+    for key in ("source_spread_count", "related_source_count", "group_item_count"):
+        if parse_int(candidate.get(key, raw_payload.get(key))) >= 2:
+            return True
+    for key in ("usable_point_count", "fact_point_count", "card_point_count"):
+        if parse_int(candidate.get(key, raw_payload.get(key))) >= MIN_VALID_BULLETS:
+            return True
+    return False
+
+
+def invalid_card_point_reason(point: str, title: str, source: str, candidate: dict[str, Any]) -> str:
+    cleaned = clean(point)
+    if len(cleaned) < 12 or len(cleaned.split()) < 3:
+        return "CARD_POINT_TOO_SHORT"
+    if contains_url(cleaned):
+        return "CARD_POINT_URL_ECHO"
+    if contains_forbidden_text(cleaned):
+        return "CARD_POINT_FORBIDDEN_SYSTEM_TEXT"
+    normalized = normalized_card_point(cleaned)
+    title_norm = normalized_card_point(title)
+    source_norm = normalized_card_point(source)
+    if title_norm and normalized == title_norm:
+        return "CARD_POINT_TITLE_ECHO"
+    if title_norm and mostly_repeats_title(normalized, title_norm):
+        return "CARD_POINT_TITLE_ECHO"
+    if source_norm and normalized in {source_norm, f"source {source_norm}", f"from {source_norm}", f"via {source_norm}"}:
+        return "CARD_POINT_SOURCE_ECHO"
+    if source_norm and normalized.replace("source ", "").strip() == source_norm:
+        return "CARD_POINT_SOURCE_ECHO"
+    if source_norm and title_norm and title_norm in normalized and source_norm in normalized:
+        return "CARD_POINT_TITLE_ECHO"
+    category_norm = normalized_card_point(candidate.get("category"))
+    if normalized in {"source", "official source", "category", category_norm}:
+        return "CARD_POINT_GENERIC_LABEL"
+    return ""
+
+
+def normalized_card_point(value: Any) -> str:
+    text = normalize_plain_text(str(value or "")).lower()
+    text = re.sub(r"https?://\S+|www\.\S+", " ", text)
+    text = re.sub(r"[^0-9a-z]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def mostly_repeats_title(point_norm: str, title_norm: str) -> bool:
+    point_tokens = set(point_norm.split())
+    title_tokens = set(title_norm.split())
+    if not point_tokens or not title_tokens:
+        return False
+    overlap = len(point_tokens & title_tokens) / max(1, len(title_tokens))
+    length_close = len(point_norm) <= int(len(title_norm) * 1.35) + 8
+    return overlap >= 0.8 and length_close
+
+
+def contains_url(value: str) -> bool:
+    text = clean(value).lower()
+    return bool(re.search(r"https?://|www\.|facebook\.com/profile\.php|facebook\.com/", text))
 
 
 def valid_link(value: str) -> bool:
@@ -458,3 +590,10 @@ def parse_score(value: Any) -> float:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def parse_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0

@@ -54,6 +54,22 @@ Then check:
 - verification plan
 - stop conditions
 
+## Individual Request Default Rule
+
+When a user gives an individual issue-specific follow-up without an explicit implementation trigger, Codex must treat the task as `READ_ONLY_AUDIT` by default.
+
+Review-only default applies to questions such as:
+
+- whether a displayed candidate is relevant
+- why a duplicate or near-duplicate appeared
+- whether a category/status/source mapping is correct
+- whether a screenshot or Telegram review item looks wrong
+- whether an official notice ZIP/PDF should be public content
+
+Implementation requires an explicit bounded trigger such as `!wc-fix`, "implement", "patch", "fix it", "apply the fix", or a prompt with declared `AREA`, `MODE`, and `FOCUS`.
+
+Without that trigger, Codex should inspect, report, and propose `CODE_TASK_CANDIDATE` items instead of editing runtime code.
+
 ## Multi-Responsibility File Rule
 
 Same file does not mean same work area.
@@ -133,8 +149,13 @@ Purpose: Codex operating harness, stop gates, reporting, work-area registry.
 Allowed files:
 
 ```text
+CODEX_BOOTSTRAP.md
 DOC/architecture/05_CODEX_HARNESS_GUIDE.md
 DOC/architecture/06_WORK_AREA_REGISTRY.md
+DOC/walkthrough/README.md
+DOC/walkthrough/execution-history/
+DOC/correction-loop/README.md
+DOC/correction-loop/
 ```
 
 Allowed: documentation-only harness rule clarification.
@@ -157,6 +178,14 @@ DOC/walkthrough/ when explicitly allowed
 Forbidden: runtime implementation, DB schema changes, migrations, scheduler or publisher behavior.
 
 Risk: LOW.
+
+Execution boundary:
+
+- `DOC/walkthrough/` may contain daily execute prompt files and same-day working records.
+- Walkthrough-based execution must follow `DOC/architecture/05_CODEX_HARNESS_GUIDE.md` `Walkthrough Execution Rule`.
+- `DOC/walkthrough/execution-history/` is an execution result archive, not an active rule source and not implementation permission.
+- `execution-history` reports may be read for context, but they do not override `DOC/architecture` or declared `PURPOSE FUNCTION`, `AREA`, `MODE`, allowed files, forbidden files, or stop conditions.
+- Report language follows `DOC/architecture/05_CODEX_HARNESS_GUIDE.md` `Report Language Rule`.
 
 ### AREA: DASHBOARD_STATUS
 
@@ -388,8 +417,32 @@ Forbidden:
 - legal certainty generation
 - auto publishing official notices without review
 - destructive migration
+- treating ZIP attachment existence or generic attachment text as publishable immigration content
+- classifying an official notice as `IMMIGRATION_INFO` only from source/menu label when document contents are not inspected
 
 Risk: MEDIUM-HIGH.
+
+Execution card: Official Notice Attachment Review Required
+
+Use when an official MOEL/MOJ/HiKorea/EPS notice has ZIP/PDF/HWP/HWPX/DOC/DOCX/XLS/XLSX attachments and the extracted public content is only generic attachment text or source/menu label inference.
+
+Action:
+
+- keep original notice URL and attachment metadata as source evidence
+- require attachment metadata review before public content classification
+- prefer `ATTACHMENT_REVIEW_REQUIRED`, `EVIDENCE_ONLY`, or closest non-public review state until the document content is inspected
+- audit repeated `bbs_seq` items with similar title/source/preview for attachment-group duplication
+
+Do not touch:
+
+- Facebook publisher
+- content publisher
+- scheduler
+- Telegram callback/runtime behavior
+- auth/env/config
+- external API behavior
+
+This is an architecture/work-area rule only. Do not implement runtime behavior from this card without an approved task.
 
 ### AREA: LIVING_DOMAIN
 

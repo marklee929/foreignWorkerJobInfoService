@@ -931,20 +931,72 @@ class NewsRepository:
             conn.commit()
         return int(row[0])
 
-    def list_pipeline_logs(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    def list_pipeline_logs(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        level: str = "",
+        status: str = "",
+        search: str = "",
+        module: str = "",
+        date_from: str = "",
+        date_to: str = "",
+    ) -> list[dict[str, Any]]:
+        where = []
+        params: list[Any] = []
+        normalized_level = (level or "").strip().upper()
+        normalized_status = (status or "").strip().upper()
+        if normalized_status:
+            where.append("UPPER(status) = %s")
+            params.append(normalized_status)
+        if normalized_level == "ERROR":
+            where.append("(UPPER(status) IN ('FAILED', 'ERROR') OR COALESCE(message, '') ILIKE %s)")
+            params.append("%error%")
+        elif normalized_level == "WARN":
+            where.append("UPPER(status) IN ('SKIPPED', 'WAITING', 'BLOCKED', 'SUPPRESSED', 'RETRY', 'RETRYABLE')")
+        elif normalized_level == "INFO":
+            where.append(
+                "UPPER(status) NOT IN ('FAILED', 'ERROR', 'SKIPPED', 'WAITING', 'BLOCKED', 'SUPPRESSED', 'RETRY', 'RETRYABLE')"
+            )
+        if module:
+            where.append("(module_key ILIKE %s OR step_name ILIKE %s)")
+            term = f"%{module.strip()}%"
+            params.extend([term, term])
+        if search:
+            term = f"%{search.strip()}%"
+            where.append(
+                """
+                (
+                    COALESCE(message, '') ILIKE %s
+                    OR COALESCE(skipped_reason, '') ILIKE %s
+                    OR COALESCE(module_key, '') ILIKE %s
+                    OR COALESCE(step_name, '') ILIKE %s
+                    OR COALESCE(payload_json::text, '') ILIKE %s
+                )
+                """
+            )
+            params.extend([term, term, term, term, term])
+        if date_from:
+            where.append("created_at >= %s::timestamptz")
+            params.append(date_from)
+        if date_to:
+            where.append("created_at <= %s::timestamptz")
+            params.append(date_to)
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
         with connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    """
-                    SELECT id, news_candidate_id, step_name AS step, status,
+                    f"""
+                    SELECT id, news_candidate_id, module_key, step_name AS step, status,
                            COALESCE(message, skipped_reason, '') AS message,
                            payload_json::text AS payload_json,
                            created_at
                     FROM social_news.pipeline_step_log
+                    {where_sql}
                     ORDER BY created_at DESC, id DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (limit, offset),
+                    tuple(params + [limit, offset]),
                 )
                 rows = cur.fetchall()
                 columns = [column.name for column in cur.description]

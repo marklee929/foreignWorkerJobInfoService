@@ -10,6 +10,17 @@ defineProps({
     required: true,
   },
 })
+
+function isNavActive(item) {
+  if (item.path === '/') {
+    return route.path === '/'
+  }
+  return route.path === item.path || Boolean(item.children?.some((child) => route.path === child.path))
+}
+
+function isChildActive(item) {
+  return route.path === item.path
+}
 </script>
 
 <template>
@@ -24,11 +35,23 @@ defineProps({
           <RouterLink
             :to="item.path"
             class="flex items-center gap-sm rounded-lg px-md py-sm text-label-caps transition"
-            :class="route.path === item.path && route.path !== '/' ? 'bg-secondary-container text-white' : 'text-on-surface-variant hover:bg-surface-container-high'"
+            :class="isNavActive(item) ? 'bg-secondary-container text-white' : 'text-on-surface-variant hover:bg-surface-container-high'"
           >
             <component :is="item.icon" :size="18" />
             <span>{{ item.label }}</span>
           </RouterLink>
+          <ul v-if="item.children?.length && isNavActive(item)" class="mt-xs space-y-xxs pl-lg">
+            <li v-for="child in item.children" :key="child.label">
+              <RouterLink
+                :to="child.path"
+                class="flex items-center gap-xs rounded-md px-sm py-xs text-label-sm transition"
+                :class="isChildActive(child) ? 'bg-primary-container text-white' : 'text-on-surface-variant hover:bg-surface-container-high'"
+              >
+                <component :is="child.icon" :size="14" />
+                <span>{{ child.label }}</span>
+              </RouterLink>
+            </li>
+          </ul>
         </li>
       </ul>
     </nav>

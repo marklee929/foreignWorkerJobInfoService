@@ -3014,16 +3014,48 @@ def repost_candidate(candidate_id: int) -> dict[str, Any]:
     }
 
 
-def log_rows(limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
-    logs = news_repository().list_pipeline_logs(limit=limit, offset=offset)
+def log_level(status: str) -> str:
+    normalized = (status or "").upper()
+    if normalized in {"FAILED", "ERROR"}:
+        return "ERROR"
+    if normalized in {"SKIPPED", "WAITING", "BLOCKED", "SUPPRESSED", "RETRY", "RETRYABLE"}:
+        return "WARN"
+    return "INFO"
+
+
+def log_rows(
+    limit: int = 50,
+    offset: int = 0,
+    level: str = "",
+    status: str = "",
+    search: str = "",
+    module: str = "",
+    date_from: str = "",
+    date_to: str = "",
+) -> list[dict[str, Any]]:
+    logs = news_repository().list_pipeline_logs(
+        limit=limit,
+        offset=offset,
+        level=level,
+        status=status,
+        search=search,
+        module=module,
+        date_from=date_from,
+        date_to=date_to,
+    )
     return [
         {
             "id": str(row["id"]),
-            "bot": "소셜 뉴스 봇",
-            "level": "ERROR" if row["status"] == "FAILED" else "WARN" if row["status"] in {"SKIPPED", "WAITING"} else "INFO",
+            "bot": row.get("module_key") or "social_news_bot",
+            "module": row.get("module_key") or "social_news_bot",
+            "level": log_level(row.get("status", "")),
+            "status": row.get("status") or "",
             "message": row["message"],
             "time": row["created_at"],
             "latency": row["step"],
+            "step": row["step"],
+            "candidate_id": row.get("news_candidate_id"),
+            "payload_json": row.get("payload_json") or "{}",
         }
         for row in logs
     ]
@@ -3092,7 +3124,20 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/logs/recent":
                 limit = clamp_query_int(query, "limit", 50, minimum=1, maximum=100)
                 offset = clamp_query_int(query, "offset", 0, minimum=0, maximum=10000)
-                self._send_json({"items": log_rows(limit=limit, offset=offset)})
+                self._send_json(
+                    {
+                        "items": log_rows(
+                            limit=limit,
+                            offset=offset,
+                            level=str(query.get("level", [""])[0]).strip(),
+                            status=str(query.get("status", [""])[0]).strip(),
+                            search=str(query.get("search", [""])[0]).strip(),
+                            module=str(query.get("module", [""])[0]).strip(),
+                            date_from=str(query.get("date_from", [""])[0]).strip(),
+                            date_to=str(query.get("date_to", [""])[0]).strip(),
+                        )
+                    }
+                )
             elif path == "/api/admin/bot/status":
                 self._send_json(format_bot_status(bot_runtime_row()))
             elif path == "/api/admin/content-bot/status":

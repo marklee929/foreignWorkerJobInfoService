@@ -6,6 +6,7 @@ import {
   FileText,
   Globe2,
   Network,
+  ScrollText,
   Settings,
   TrendingUp,
 } from '@lucide/vue'
@@ -20,7 +21,15 @@ export const navItems = [
   { label: '출입국', icon: Globe2, path: '/immigration' },
   { label: '직업정보', icon: BriefcaseBusiness, path: '/labor' },
   { label: '데이터 품질', icon: TrendingUp, path: '/data-quality' },
-  { label: '시스템 설정', icon: Settings, path: '/system-settings' },
+  {
+    label: '시스템 설정',
+    icon: Settings,
+    path: '/system-settings/code-guide',
+    children: [
+      { label: '코드 가이드', icon: Settings, path: '/system-settings/code-guide' },
+      { label: '운영 로그', icon: ScrollText, path: '/system-settings/logs' },
+    ],
+  },
 ]
 
 export const runtimeConfig = {

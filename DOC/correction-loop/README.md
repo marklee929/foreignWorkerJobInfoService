@@ -155,3 +155,26 @@ Documents in this folder are review material only.
 They do not execute changes, approve implementation, or override active architecture rules.
 
 Active rules remain in `DOC/architecture/00` through `DOC/architecture/06` until a human-approved task promotes a finding.
+
+## Harness Closeout Failure Rule
+
+A chat-only report is an incomplete execution for walkthrough-driven Codex work.
+
+Record a correction-loop item when Codex:
+
+- finishes a task but fails to save the report under `DOC/walkthrough/execution-history/YYYY-MM-DD/`
+- fails to update the relevant daily execute prompt when the task requires it
+- leaves multiple completion markers
+- uses the legacy decorated Korean marker
+- leaves a loose completion marker variant
+- writes the completion marker only in chat instead of the execute prompt
+- fails to verify marker count and final-line placement
+- stops on a new daily execute prompt only because the first-run marker is absent, even though the file contains one clear pending task
+
+Classify these as:
+
+- verification/reporting
+- walkthrough closeout
+- harness trigger failure
+
+The correction-loop item should state the missed closeout step, the repaired files, protected areas not touched, and the prevention rule that should be promoted if the failure repeats.

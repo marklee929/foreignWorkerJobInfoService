@@ -83,6 +83,23 @@ function formatDate(value) {
   return value ? String(value).replace('T', ' ').slice(0, 16) : '-'
 }
 
+function formatPayload(value) {
+  if (!value) return ''
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function cardPreviewClass(preview) {
+  if (!preview) return 'border-outline-variant bg-surface-container-low text-on-surface-variant'
+  if (preview.ok || preview.status === 'CARD_PREVIEW_GENERATED') return 'border-success bg-success-container text-success'
+  if (preview.status === 'CARD_NOT_REQUIRED') return 'border-outline-variant bg-surface-container-low text-on-surface-variant'
+  return 'border-error bg-error-container text-error'
+}
+
 function sourceLabel(value) {
   const labels = {
     SOCIAL_NEWS: '소셜 뉴스',
@@ -441,9 +458,26 @@ onMounted(loadAll)
               </div>
               <p v-if="log.error_message" class="mt-xs text-error">{{ log.error_message }}</p>
               <a v-if="log.facebook_post_url" class="mt-xs block break-all text-primary underline" :href="log.facebook_post_url" target="_blank" rel="noreferrer">{{ log.facebook_post_url }}</a>
+              <div v-if="log.content_card_preview" class="mt-sm rounded border p-sm" :class="cardPreviewClass(log.content_card_preview)">
+                <div class="flex flex-wrap items-center justify-between gap-sm">
+                  <b>card preview</b>
+                  <span class="font-mono text-label-sm">{{ log.content_card_preview.status || '-' }}</span>
+                </div>
+                <dl class="mt-xs grid gap-xs text-label-sm">
+                  <div class="flex justify-between gap-md"><dt>template</dt><dd class="font-mono">{{ log.content_card_preview.template_type || '-' }}</dd></div>
+                  <div class="flex justify-between gap-md"><dt>required</dt><dd class="font-mono">{{ log.content_card_preview.card_required ? 'YES' : 'NO' }}</dd></div>
+                  <div v-if="log.content_card_preview.image_name" class="flex justify-between gap-md"><dt>image</dt><dd class="font-mono">{{ log.content_card_preview.image_name }}</dd></div>
+                </dl>
+                <p v-if="log.content_card_preview.reason" class="mt-xs whitespace-pre-wrap">{{ log.content_card_preview.reason }}</p>
+                <p v-if="log.content_card_preview.image_path" class="mt-xs break-all font-mono text-[11px]">{{ log.content_card_preview.image_path }}</p>
+                <details v-if="log.content_card_preview.payload && Object.keys(log.content_card_preview.payload).length" class="mt-xs">
+                  <summary class="cursor-pointer font-bold">card payload</summary>
+                  <pre class="mt-xs max-h-40 overflow-auto rounded bg-white/60 p-sm text-[11px] text-on-surface">{{ formatPayload(log.content_card_preview.payload) }}</pre>
+                </details>
+              </div>
               <details v-if="log.request_payload || log.response_payload" class="mt-xs">
                 <summary class="cursor-pointer font-bold">payload</summary>
-                <pre class="mt-xs max-h-48 overflow-auto rounded bg-surface-container-low p-sm text-[11px]">{{ log.request_payload || log.response_payload }}</pre>
+                <pre class="mt-xs max-h-48 overflow-auto rounded bg-surface-container-low p-sm text-[11px]">{{ formatPayload(log.request_payload || log.response_payload) }}</pre>
               </details>
             </div>
             <p v-if="!publishLogs.length" class="text-body-sm text-on-surface-variant">검토/게시 로그가 없습니다.</p>

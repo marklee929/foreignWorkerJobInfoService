@@ -207,6 +207,31 @@ SYSTEM_MESSAGE_TERMS = (
     "threshold",
     "publish_status",
 )
+ATTACHMENT_REVIEW_STATE = "ATTACHMENT_REVIEW_REQUIRED"
+ATTACHMENT_EVIDENCE_ONLY_STATE = "EVIDENCE_ONLY"
+DOCUMENT_EXTRACTION_REQUIRED_STATE = "DOCUMENT_EXTRACTION_REQUIRED"
+ATTACHMENT_ONLY_TERMS = (
+    "attachment exists",
+    "attached file",
+    "attached files",
+    "attachment only",
+    "zip attachment",
+    "downloadallzip.do",
+    "첨부파일",
+    "첨부 파일",
+    "泥⑤",
+)
+ATTACHMENT_FILE_TERMS = (
+    ".zip",
+    ".pdf",
+    ".hwp",
+    ".hwpx",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    "downloadallzip.do",
+)
 
 
 @dataclass(frozen=True)
@@ -469,6 +494,9 @@ class ContentService:
         return source_domain in TELEGRAM_REVIEW_SOURCE_DOMAINS and content_quality_gate(candidate).review_eligible
 
     def telegram_review_message(self, candidate: dict[str, Any], card_preview: dict[str, Any] | None = None) -> str:
+        gate = content_quality_gate(candidate)
+        if gate.code == ATTACHMENT_REVIEW_STATE:
+            return build_attachment_metadata_review_message(candidate, gate)
         card_ok = bool((card_preview or {}).get("ok"))
         format_label = "CARD_IMAGE" if card_ok else "LINK_OR_TEXT"
         template = (card_preview or {}).get("template_type") or "-"
@@ -665,6 +693,18 @@ def apply_content_quality_gate(payload: dict[str, Any]) -> dict[str, Any]:
     decision = content_quality_gate(payload)
     raw_payload = payload.get("raw_payload") if isinstance(payload.get("raw_payload"), dict) else {}
     payload["raw_payload"] = {**raw_payload, **decision.as_payload()}
+    if decision.code == ATTACHMENT_REVIEW_STATE:
+        payload["content_type"] = DOCUMENT_EXTRACTION_REQUIRED_STATE
+        payload["priority_group"] = ATTACHMENT_EVIDENCE_ONLY_STATE
+        payload["raw_payload"] = {
+            **payload["raw_payload"],
+            "attachment_review_state": ATTACHMENT_REVIEW_STATE,
+            "classification_status": "CLASSIFICATION_PENDING",
+            "evidence_only_yn": True,
+            "public_preview_allowed_yn": False,
+            "telegram_review_suppression_reason": "zip_attachment_evidence_only",
+            "attachment_review_reason": "attachment_content_not_inspected",
+        }
     if decision.code != "REVIEW_ELIGIBLE":
         payload["review_reason"] = f"{decision.code}: {decision.reason}"
     if not decision.publish_eligible:
@@ -735,6 +775,18 @@ def content_quality_gate(candidate: dict[str, Any]) -> ContentGateDecision:
             False,
             False,
             hard_block=True,
+        )
+    if official_attachment_review_required(candidate, text, link, official):
+        return ContentGateDecision(
+            ATTACHMENT_REVIEW_STATE,
+            (
+                "official_notice_attachment_review_required: "
+                "attachment_content_not_inspected; zip_attachment_evidence_only; "
+                "generic_attachment_preview_not_publishable; "
+                "source_menu_label_classification_pending"
+            ),
+            False,
+            False,
         )
     if has_any(text, SYSTEM_MESSAGE_TERMS):
         return ContentGateDecision(
@@ -859,6 +911,50 @@ def gate_text(candidate: dict[str, Any]) -> str:
     return normalize_plain_text(" ".join(str(part or "") for part in parts)).lower()
 
 
+def public_body_text(candidate: dict[str, Any]) -> str:
+    return normalize_plain_text(
+        " ".join(
+            str(candidate.get(key) or "")
+            for key in ("summary_en", "body_en")
+        )
+    ).lower()
+
+
+def raw_payload_text(candidate: dict[str, Any]) -> str:
+    raw_payload = candidate.get("raw_payload") or {}
+    if not isinstance(raw_payload, dict):
+        return normalize_plain_text(str(raw_payload)).lower()
+    parts: list[str] = []
+    for value in raw_payload.values():
+        if isinstance(value, (dict, list, tuple)):
+            parts.append(str(value))
+        elif value is not None:
+            parts.append(str(value))
+    return normalize_plain_text(" ".join(parts)).lower()
+
+
+def official_attachment_review_required(candidate: dict[str, Any], text: str, link: str, official: bool) -> bool:
+    if not official:
+        return False
+    link_text = clean(link).lower()
+    evidence_text = " ".join([text, link_text, raw_payload_text(candidate)])
+    has_attachment_evidence = has_any(evidence_text, ATTACHMENT_FILE_TERMS) or has_any(evidence_text, ATTACHMENT_ONLY_TERMS)
+    if not has_attachment_evidence:
+        return False
+    body_text = public_body_text(candidate)
+    if not body_text:
+        return True
+    body_without_attachment_words = body_text
+    for term in ATTACHMENT_ONLY_TERMS:
+        body_without_attachment_words = body_without_attachment_words.replace(term.lower(), " ")
+    body_without_attachment_words = re.sub(r"[^0-9a-z]+", " ", body_without_attachment_words).strip()
+    if not body_without_attachment_words:
+        return True
+    if has_any(body_text, ATTACHMENT_ONLY_TERMS) and len(body_without_attachment_words) < 24:
+        return True
+    return False
+
+
 def usable_link(candidate: dict[str, Any]) -> str:
     return clean(candidate.get("link_url") or candidate.get("source_url") or candidate.get("original_source_url") or "")
 
@@ -929,6 +1025,48 @@ def title_only_or_missing_content(candidate: dict[str, Any], official: bool) -> 
     )
     title = clean(candidate.get("title") or candidate.get("original_title") or "")
     return bool(title) and len(public_text) < 40
+
+
+def build_attachment_metadata_review_message(candidate: dict[str, Any], decision: ContentGateDecision) -> str:
+    source_name = clean(candidate.get("source_name") or candidate.get("original_source_name") or "-")
+    title = clean(candidate.get("title") or candidate.get("original_title") or "-")
+    link = clean(candidate.get("link_url") or candidate.get("source_url") or candidate.get("original_source_url") or "-")
+    parsed = urlsplit(link) if link.startswith(("http://", "https://")) else None
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True)) if parsed else {}
+    raw_payload = candidate.get("raw_payload") if isinstance(candidate.get("raw_payload"), dict) else {}
+    raw_response = raw_payload.get("raw_response") if isinstance(raw_payload.get("raw_response"), dict) else {}
+    attachment_name = clean(
+        raw_payload.get("attachment_filename")
+        or raw_payload.get("attachment_name")
+        or raw_response.get("attachment_filename")
+        or raw_response.get("attachment_name")
+        or "-"
+    )
+    attachment_size = clean(
+        raw_payload.get("attachment_size")
+        or raw_response.get("attachment_size")
+        or "-"
+    )
+    bbs_seq = clean(query.get("bbs_seq") or raw_payload.get("bbs_seq") or raw_response.get("bbs_seq") or "-")
+    bbs_id = clean(query.get("bbs_id") or raw_payload.get("bbs_id") or raw_response.get("bbs_id") or "-")
+    return "\n".join(
+        [
+            "[Content Review - Evidence Only]",
+            f"ID: {candidate.get('id')}",
+            f"Source: {candidate.get('source_domain') or '-'} / {candidate.get('content_type') or '-'} / {source_name}",
+            f"Status: {ATTACHMENT_EVIDENCE_ONLY_STATE}",
+            f"Reason: {decision.reason}",
+            f"Title: {title}",
+            f"Link: {link}",
+            f"bbs_seq: {bbs_seq}",
+            f"bbs_id: {bbs_id}",
+            f"Attachment: {attachment_name}",
+            f"Attachment size: {attachment_size}",
+            "",
+            "No Facebook Format Preview is generated.",
+            "Document extraction is required before public classification or publishing.",
+        ]
+    )
 
 
 def safe_float(value: Any) -> float:
