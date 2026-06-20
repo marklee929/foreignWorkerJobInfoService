@@ -29,6 +29,8 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 SAMPLE_PAYLOAD_DIR = TEMPLATE_DIR / "json_payloads"
 GENERATED_OUTPUT_DIR = PACKAGE_ROOT / "storage" / "generated" / "content_cards"
 DEFAULT_FOOTER_URL = "WorkConnect Korea"
+OLLAMA_CARD_PAYLOAD_KEEP_ALIVE_ENV = "OLLAMA_CARD_PAYLOAD_KEEP_ALIVE"
+DEFAULT_CARD_PAYLOAD_KEEP_ALIVE = "30s"
 DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TEMPLATE_SAMPLE_FILES = {
     "ALERT_REVIEW": "alert_review.json",
@@ -231,7 +233,7 @@ def request_llama_payload(prompt: str, endpoint: str = "", model: str = "", time
                 "num_predict": int(os.environ.get("OLLAMA_CARD_PAYLOAD_NUM_PREDICT", "700")),
                 "num_ctx": int(os.environ.get("OLLAMA_CARD_PAYLOAD_NUM_CTX", os.environ.get("OLLAMA_NUM_CTX", "2048"))),
             },
-            "keep_alive": os.environ.get("OLLAMA_KEEP_ALIVE", "30s"),
+            "keep_alive": os.environ.get(OLLAMA_CARD_PAYLOAD_KEEP_ALIVE_ENV, DEFAULT_CARD_PAYLOAD_KEEP_ALIVE),
         },
         ensure_ascii=False,
     ).encode("utf-8")

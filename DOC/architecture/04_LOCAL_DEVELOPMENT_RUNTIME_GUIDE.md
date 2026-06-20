@@ -1,504 +1,286 @@
-# Local Development Runtime Guide
+# Local Runtime Safety
 
 ## Purpose
 
-This document defines development rules for WorkConnect while it is operated from a local PC before deployment to a production server.
+This document defines runtime safety rules while WorkConnect is operated from a local PC before production deployment.
 
-WorkConnect is currently not running as a public production web service.
+The local environment is both a development environment and an operations environment. Local changes can affect real data, Telegram notifications, and Facebook public output.
 
-It is operated as a local web/admin system connected to local backend services, local database, local automation bots, local LLaMA/Ollama, Facebook publishing, and Telegram operation notifications.
-
-Because the local environment is both a development environment and an operations environment, code changes must not casually break the running server, admin UI, scheduler, database access, or publishing pipeline.
+For Codex harness operation, use `05_CODEX_HARNESS_GUIDE.md` and `06_WORK_AREA_REGISTRY.md`. This document controls runtime safety triggers and verification expectations.
 
 ## Current Runtime Assumption
 
-Until production deployment, WorkConnect is operated as:
+Current runtime:
 
 ```text
 local PC
-→ local backend server
-→ local admin web UI
-→ local PostgreSQL
-→ local automation bots
-→ optional local LLaMA/Ollama
-→ Facebook / Telegram external APIs
+-> local backend server
+-> local admin web UI
+-> local PostgreSQL
+-> local automation bots/schedulers
+-> optional local LLaMA/Ollama
+-> external Facebook and Telegram APIs
 ```
 
-The system may still publish externally even though the web server is local.
+Even when the web/admin system is local, public delivery and operation notifications may be external.
 
-Therefore, local development changes can affect real Facebook posting, Telegram notifications, collected data, and admin operations.
+## Core Runtime Rule
 
-## Core Rule
+A runtime change is not complete because syntax is valid.
 
-Development must preserve local runtime stability.
+A runtime change is complete only when the relevant runtime path is verified and protected areas were not touched unintentionally.
 
-A code change is not complete just because syntax is valid.
-
-A code change is complete only when:
-
-backend server can start
-frontend web can run
-frontend can communicate with backend
-admin screen can load
-critical status APIs respond
-no protected area was changed unintentionally
-UI is visually checked
-logs do not show new runtime errors
 ## Local Server Safety
 
-Before and after code changes, developers or Codex must verify server health.
+Backend checks should confirm:
 
-Required checks
+- server starts without import or configuration errors
+- health/status endpoint responds
+- first request does not crash the server
+- dashboard load does not crash the server
+- unexpected 500 errors are not introduced
+- CORS/preflight behavior still works when relevant
+- optional endpoint failure is not misclassified as full server failure
 
-Check that the backend server:
+Frontend checks should confirm:
 
-starts without import errors
-keeps running after first request
-returns health/status response
-does not crash after dashboard load
-does not return unexpected 500 errors
-handles CORS/preflight correctly
-does not misclassify optional endpoint failure as full server failure
+- dev server or build works when relevant
+- admin page loads
+- frontend can call backend APIs
+- loading, empty, and error states are reasonable
+- polling does not create duplicate loops or heavy repeated calls
 
-Check that the frontend:
+## Frontend-Backend Communication Rule
 
-builds or dev server starts
-can load the admin page
-can call backend APIs
-does not show server disconnected incorrectly
-does not create infinite polling loops
-does not repeatedly call heavy APIs on route changes
-Backend Restart Rule
-
-If the backend server crashes during development:
-
-Stop further feature work.
-Identify the crash reason.
-Fix the crash.
-Restart the backend.
-Verify health/status endpoint.
-Reload admin UI.
-Confirm frontend-backend communication.
-Only then continue the original task.
-
-Do not continue implementing unrelated changes while the server is broken.
-
-Frontend-Backend Communication Rule
-
-Any change to API routes, API client, CORS, headers, auth, response status, or endpoint return shape must be verified from both sides.
-
-Verify:
-
-request URL
-HTTP method
-response status
-JSON shape
-CORS headers
-auth/device headers
-frontend error handling
-loading state
-empty state
-failure state
-
-Special caution:
-
-204 No Content
-
-must not be treated as full server disconnection unless the endpoint explicitly means server failure.
-
-Local Admin UI Rule
-
-Admin UI work must be visually checked.
-
-A UI task is not complete until the relevant screen is opened and inspected.
+Any change to routes, API client behavior, CORS, headers, auth, response status, or response shape must be verified from both sides.
 
 Check:
 
-layout is not broken
-cards align correctly
-tables do not overflow unexpectedly
-long text is truncated or wrapped safely
-buttons are visible and understandable
-Korean labels are displayed correctly
-status badges are readable
-loading/empty/error states are reasonable
-no unrelated screen was visually damaged
+- request URL
+- HTTP method
+- response status
+- JSON shape
+- CORS headers
+- auth/device headers
+- frontend error handling
+- loading/empty/failure states
 
-If UI cannot be visually checked, the task report must say so.
+`204 No Content` must not be treated as full server disconnection unless that endpoint explicitly means server failure.
 
-Language Rule
+## Admin UI Visual Check Rule
 
-User-facing strings in the admin UI should be Korean by default unless they are code values, API enum values, external service names, or English content intended for Facebook/public posts.
+Admin UI changes require visual inspection when possible.
 
-Use Korean for
-admin UI labels
-button labels
-status descriptions
-validation messages
-local operation messages
-user-facing error messages
-Keep English for
-code constants
-API enum values
-environment variable names
-external service names
-Facebook post content when English is intended
-raw source article titles
-technical log keys
+Check:
 
-Examples:
+- target screen loads
+- layout is not broken
+- tables do not overflow unexpectedly
+- long text wraps or truncates safely
+- buttons and status badges are readable
+- Korean labels render correctly
+- timestamps are unambiguous
+- unrelated screens were not damaged
 
-게시 완료
-게시 대기
-서버 연결 안 됨
-최근 로그
-수집 상태
-콘텐츠 후보
+If visual verification cannot be performed, the task report must say so.
 
-Do not randomly mix Korean and English in admin UI labels unless the English term is a product/module name.
+## Runtime Trigger Cards
 
-Timestamp Rule
+### Trigger: Backend Crash
 
-All displayed operational timestamps should use:
+Action: stop feature work, identify crash source, classify area, fix only if inside allowed area, restart, verify health.
 
-YYYY-MM-DD HH24:MI:SS
+### Trigger: Frontend Cannot Connect
 
-Examples:
+Action: verify backend health, API URL, CORS, auth/device headers, and endpoint response shape before changing unrelated UI.
 
-2026-06-10 21:35:12
-2026-06-11 09:54:00
+### Trigger: Protected Area Appears
 
-Avoid ambiguous formats such as:
+Condition: auth, device approval, Facebook publisher, token validation, scheduler, bot state, destructive DB migration, content publisher, env/secrets.
 
-6/10/26
-오전 7:46
-Tue Jun 10
+Action: stop and report unless explicitly approved.
 
-If timezone matters, display or document it as KST.
+### Trigger: External Output Risk
 
-Recommended:
+Condition: change could alter Facebook posting, Telegram notification, publish selection, retry, frequency, or public message text.
 
-YYYY-MM-DD HH24:MI:SS KST
-Error Message Rule
+Action: stop or switch to approved guarded/protected mode.
 
-Internal system messages must not become user-facing content.
+### Trigger: Local Test Touches Real External Output
 
-Forbidden in public/generated content:
+Condition: a local test, smoke test, verification step, or manual run could send a real Facebook post, Telegram message, external API request, publish/review notification, or scheduler-triggered external output.
 
-저장된 기사 본문이 없습니다.
-일부 RSS/검색 결과는 원문 HTML 접근이 제한될 수 있습니다.
-관리자 재게시 요청으로 즉시 Facebook 게시를 시도했습니다.
-게시 기준 40점 이상을 충족했습니다.
-현재 점수:
-READY_TO_PUBLISH
-candidate
-queue
-threshold
-publish_status
+Action: require dry-run, mock mode, sandbox channel, preview-only mode, or explicit user approval before execution. If dry-run/mock mode is unavailable, stop and report.
 
-These may appear only in:
+Do not verify by sending real external output unless explicitly approved. A local server is not automatically safe.
 
-admin diagnostics
-pipeline logs
-error reports
-debug fields
-stop reports
+### Trigger: Boundary Error
 
-They must not appear in:
+Condition: error points outside declared AREA or requires another module.
 
-Facebook posts
-public summaries
-why-it-matters text
-guide content
-user-facing content candidate body
-Runtime Error Handling Rule
+Action: stop and report; do not patch unrelated code.
 
-A runtime error must be classified before fixing.
+### Trigger: Silent Degradation
 
-Local task error
+Condition: proposed fix hides failures by returning fake success or empty data.
 
-The error is inside the current task area.
+Action: reject; report explicit degraded status instead.
 
-Allowed:
+## Runtime Execution Card
 
-fix within current allowed files
-verify and continue
-Boundary error
+Before runtime code changes:
 
-The error points to another area.
+```text
+identify AREA and MODE
+-> identify affected screen/API/job/table
+-> check protected areas
+-> define verification
+-> edit only allowed responsibility
+-> verify target path
+-> report checks and risks
+```
 
-Required:
+If any step is unclear, stop before editing.
 
-stop
-write report
-ask for user review
-Protected area error
+## External Output Risk Trigger
 
-The error involves:
+Facebook and Telegram integrations may affect real external users.
 
-admin auth
-device approval
-Facebook publisher
-token validation
-scheduler
-bot state
-destructive DB migration
-content publisher
-environment secrets
+Do not change without guarded review or explicit protected approval:
 
-Required:
+- publish frequency
+- token validation
+- publish payload
+- content selection
+- retry policy
+- Telegram notification structure
+- Facebook link/message behavior
 
-stop
-do not patch blindly
-write stop report
-No Silent Degradation Rule
+Publishing failures must preserve source error details such as Meta error type, code, subcode, message, and `fbtrace_id` when available. Do not collapse all failures into a generic token error.
 
-Do not hide errors by returning fake success.
-
-Examples of forbidden behavior:
-
-return empty dashboard because query failed
-mark Facebook token invalid without Meta error code
-turn bot off permanently after retryable DB error
-show server disconnected because one optional endpoint failed
-publish fallback content when article body is missing
-
-Prefer explicit degraded status:
-
-PARTIAL_FAILURE
-DATA_UNAVAILABLE
-TOKEN_STATUS_UNKNOWN
-LINK_VALIDATION_FAILED
-CONTENT_MISSING
-RETRYABLE_DB_ERROR
-Database Safety Rule
-
-During local development, PostgreSQL may contain real collected data and publish history.
-
-Do not run destructive DB changes without explicit approval.
-
-Forbidden without approval:
-
-DROP TABLE
-TRUNCATE
-DELETE bulk data
-destructive ALTER
-status mass rewrite
-removing publish logs
-removing candidates
-clearing content queue
-
-Preferred first:
-
-SELECT diagnostics
-backup
-add nullable columns
-add indexes
-archive status
-dry-run backfill
-verification SQL
-Migration Rule
-
-Migration must be non-destructive first.
-
-Preferred sequence:
-
-add new column/table
-→ backfill safely
-→ verify counts
-→ update UI/API
-→ mark old field deprecated
-→ remove only after approval
-
-Migration reports must include:
-
-migration file
-affected tables
-before/after row counts
-rollback plan
-verification SQL
-Polling and Scheduler Rule
-
-Frontend polling and backend scheduler changes are risky.
-
-When changing polling:
-
-prevent duplicate intervals
-clean up interval on route leave/unmount
-pause or reduce polling when document is hidden
-avoid polling heavy list APIs
-use summary endpoints for dashboard
-do not treat one failed optional poll as full server failure
-
-When changing scheduler:
-
-do not change intervals casually
-do not start new background loops without visibility
-do not let failed cycle permanently disable bot
-do not overlap same job unless locking is explicit
-log next run time and cooldown state clearly
-Dashboard Performance Rule
-
-Dashboard is a status board.
-
-It should read:
-
-summary counts
-status flags
-recent logs with limit
-bot status
-LLaMA status
-Facebook status
-
-Dashboard must not:
-
-load all news rows
-load all content rows
-load all logs
-count large data in frontend
-trigger collection or publishing by loading the page
-Facebook and Telegram Rule
-
-Facebook and Telegram integration may affect real external users.
-
-Do not change the following without guarded review:
-
-publish frequency
-token validation
-publish payload
-content selection
-retry policy
-Telegram notification structure
-Facebook link/message behavior
-
-When publishing fails, preserve source error.
-
-Do not collapse all Facebook errors into:
-
-FACEBOOK_PAGE_ACCESS_TOKEN is invalid
-
-Store and show:
-
-Meta error type
-code
-subcode
-message
-fbtrace_id
-internal error category
-token status snapshot without raw token
-Local LLaMA Rule
-
-Local LLaMA/Ollama is optional.
-
-The system must not fail only because local LLaMA is unavailable.
-
-Distinguish:
-
-automatic use off
-model unloaded
-Ollama server stopped
-endpoint disconnected
-timeout
-fallback used
-
-Do not kill or start server processes unless the task explicitly allows it.
-
-UI Change Rule
-
-When changing UI:
-
-Identify affected screen.
-Identify related store/API.
-Check empty/loading/error states.
-Check long text behavior.
-Check Korean labels.
-Check timestamp format.
-Confirm no unrelated screen broke.
-
-If screenshot/visual verification is not possible, report:
-
-UI visual verification not performed
-
-and explain why.
-
-Code Change Boundary Rule
+## Runtime Boundary Error Trigger
 
 Same file does not mean same responsibility.
 
-If a file contains multiple responsibilities, only modify the function/class/section related to the current task.
+If a file contains multiple responsibilities, modify only the section related to the declared work area.
 
-Example:
+Examples:
 
-If admin_server.py contains dashboard routes and Facebook routes, a dashboard task must not modify Facebook token logic.
+- a dashboard task must not change Facebook token logic in the same server file
+- a status-card task must not change bot control behavior in the same UI file
+- a content queue task must not alter scheduler or publisher behavior
 
-If Dashboard.vue contains summary cards and bot control toggles, a status card task must not modify bot control behavior.
+## DB Safety Rule
 
-Pre-Change Checklist
+PostgreSQL may contain real collected data and publish history.
 
-Before modifying code, check:
+Forbidden without explicit approval:
 
-What screen or runtime path is affected?
-What API endpoints are involved?
-What DB tables are involved?
-Could this affect auth, scheduler, publisher, or bot state?
-Can I verify server health after the change?
-Can I verify frontend-backend communication?
-Can I visually check the UI?
+- `DROP TABLE`
+- `TRUNCATE`
+- bulk `DELETE`
+- destructive `ALTER`
+- mass status rewrite
+- removing publish logs
+- removing candidates
+- clearing content queues
 
-If the answer is unclear, stop and write a short report before coding.
+Preferred first:
 
-Post-Change Checklist
+- read-only diagnostics
+- backup
+- nullable additions
+- indexes
+- archive status
+- dry-run backfill
+- verification SQL
 
-After modifying code, verify:
+## Migration Rule
 
-backend starts
-frontend starts/builds
-health/status endpoint works
-target API works
-admin UI loads
-target screen visually OK
-no new console/runtime error
-logs show no new crash
-protected areas not touched
-timestamp format OK
-Korean UI labels OK
-Completion Report Requirement
+Migrations must be non-destructive first.
 
-Any Codex or automated development task must report:
+Preferred sequence:
 
-task area
-files inspected
-files modified
-server verification result
-frontend verification result
-API verification result
-UI visual verification result
-protected areas touched or not touched
-tests/builds run
-remaining risks
-next recommended action
-Stop Rule
+```text
+add new column/table
+-> backfill safely
+-> verify counts
+-> update UI/API
+-> mark old field deprecated
+-> remove only after approval
+```
+
+Migration reports must include affected tables, before/after row counts when available, rollback plan, and verification SQL.
+
+## Scheduler and Polling Rule
+
+Polling changes must:
+
+- prevent duplicate intervals
+- clean up on route leave/unmount
+- pause or reduce work when document is hidden when appropriate
+- avoid polling heavy list APIs
+- use summary endpoints for dashboard
+- not treat one optional poll failure as full server failure
+
+Scheduler changes are protected unless explicitly approved.
+
+Do not casually change intervals, cooldowns, bot on/off transitions, loop starts, overlap behavior, or retry failure state.
+
+## Facebook and Telegram External Impact Rule
+
+Facebook is public output.
+
+Telegram is operation control and review/reporting.
+
+Both can affect real operations and must be treated as external-impact paths.
+
+Telegram summaries must not leak secrets, raw tokens, full stack traces, private credentials, or noisy logs.
+
+## Local LLaMA/Ollama Rule
+
+Local LLaMA/Ollama is optional.
+
+The system must distinguish:
+
+- automatic use off
+- model unloaded
+- Ollama server stopped
+- endpoint disconnected
+- timeout
+- fallback used
+
+Do not start, stop, kill, or require Local LLM unless the task explicitly allows it.
+
+## Completion Report Requirement
+
+Runtime tasks must report:
+
+- task area
+- files inspected
+- files modified
+- backend verification result
+- frontend verification result
+- API verification result
+- UI visual verification result if applicable
+- protected areas touched or not touched
+- tests/builds run
+- remaining risks
+- next recommended action
+
+## Stop Rule
 
 Stop and report instead of continuing when:
 
-backend cannot restart
-frontend cannot connect to backend
-auth is affected unexpectedly
-Facebook/token/scheduler logic must be changed
-DB migration becomes destructive
-UI breaks outside the target screen
-error source is outside current work area
-verification cannot be performed
-fixing requires guessing
+- backend cannot restart
+- frontend cannot connect to backend
+- auth is affected unexpectedly
+- Facebook/token/scheduler logic must be changed
+- DB migration becomes destructive
+- UI breaks outside target screen
+- error source is outside current work area
+- verification cannot be performed
+- fixing requires guessing
+- protected areas are required without approval
 
-A stopped task with a clear report is better than a completed task that breaks the local operations environment.
-
-## Related Documents
-
-- `DOC/flowchart/flowchart-flow-audit.md`
-  - See the “Recommended Corrections” section for the publishing boundary rules:
-    - source schemas collect and classify
-    - `content.content_candidate` owns final message, final link, validation state, approval state, and publish state
-    - Facebook publisher should read only final content candidates
-    - final publish validation must run before Facebook publishing
-    - blocked states must be separated from failed states
+A stopped task with a clear report is better than a completed task that breaks local operations.

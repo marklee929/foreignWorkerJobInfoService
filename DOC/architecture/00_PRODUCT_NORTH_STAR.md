@@ -1,52 +1,43 @@
-# Product North Star
+# Product Constitution
 
 ## Core Mission
 
-WorkConnect is an information platform for people who move to another country to work, live, study, or settle.
+WorkConnect is a practical, source-backed work-and-settlement information platform for people who move to another country to work, live, study, immigrate, or settle.
 
-The service helps them understand the practical information they need before and after arrival.
+The service helps users understand what to check, prepare, avoid, and do next before and after arrival.
 
-WorkConnect starts with Korea, but the product direction is not limited to Korea.
+## Purpose Function
 
-The long-term goal is to become a trusted information layer for living and working abroad.
+WorkConnect helps foreign workers, residents, students, migrants, and movers reduce uncertainty and make practical decisions through reliable information about work, visa, immigration, housing, healthcare, banking, insurance, transportation, labor rights, public services, safety, and daily life.
 
-## Product Direction
+This purpose function comes before data schema, source availability, social reach, automation convenience, or implementation shortcuts.
 
-People who move to another country face scattered, unclear, and often language-heavy information.
+## Current WorkConnect Korea Scope
 
-WorkConnect collects, organizes, explains, and delivers that information in a form that is easier to understand and act on.
+Korea is the current active market and public channel target.
 
-The service should cover not only jobs, but the full settlement journey.
+WorkConnect Korea may use Korea-specific collectors, sources, admin views, categories, and public delivery channels. Those implementation details must not redefine the global product identity.
 
-Core areas include:
+Generic global or non-Korea content may be stored as a future/global reference signal when useful, but it must not enter WorkConnect Korea public review or publishing by default.
 
-- work
-- visa
-- immigration
-- housing
-- healthcare
-- banking
-- insurance
-- transportation
-- language
-- local support
-- public services
-- rights and risks
-- daily life
+## Global Product Direction
 
-## First Market
+WorkConnect must remain expandable beyond Korea.
 
-The first target market is Korea.
+Country-specific logic should be separated from the global product model:
 
-Korea is the first implementation case because the initial data, admin UI, collectors, and publishing workflow are being built around Korea.
+```text
+global product purpose
+-> target country scope
+-> domain source data
+-> normalized information
+-> content candidate
+-> public delivery
+```
 
-However, the architecture should avoid hardcoding the product identity as Korea-only.
-
-Country-specific logic should be separated from the global product model whenever possible.
+Future countries should be added by extending sources, categories, rules, and delivery channels, not by rewriting the product purpose.
 
 ## Target Users
-
-WorkConnect serves people who are trying to understand life and work in a foreign country.
 
 Primary users include:
 
@@ -59,23 +50,21 @@ Primary users include:
 - people preparing to move overseas
 - people already living abroad who need local guidance
 
-The user may not understand the local language, local institutions, administrative terms, labor rules, or daily-life systems.
+These users may not understand the local language, institutions, legal terms, labor rules, public-service systems, or everyday settlement processes.
 
-## Core User Need
+## Classification Principle
 
-The user is usually not looking for random information.
+A topic is WorkConnect-relevant only when it helps the target user:
 
-They are trying to answer practical questions such as:
+- make a practical decision
+- reduce uncertainty
+- understand what to check next
+- access source-backed support or guidance
+- understand a work, visa, housing, healthcare, banking, labor, public-service, safety, or daily-life issue
 
-- Can I work there?
-- What visa or permit do I need?
-- What should I prepare?
-- What rights and risks should I know?
-- Where can I get help?
-- How do I handle daily life after arrival?
-- Which information is official, reliable, or only reference?
+A topic is not relevant merely because it mentions Korea, foreigners, travel, international affairs, or news.
 
-WorkConnect should prioritize information that helps users make decisions or reduce uncertainty.
+Source availability or social reach must not override product purpose.
 
 ## Product Identity
 
@@ -86,100 +75,67 @@ WorkConnect should be understood as:
 - a source-backed explainer
 - a practical information hub
 - a bridge between official information and everyday understanding
+- a future knowledge layer for guides, search, APIs, alerts, and GPT-assisted answers
 
-WorkConnect should not become:
+## What WorkConnect Must Not Become
+
+WorkConnect must not become:
 
 - a random news repost bot
+- a generic Korea news feed
 - a generic travel blog
 - a sensational issue feed
-- an unverified immigration advice site
+- an unverified visa or legal advice site
 - a job guarantee service
+- a social-posting automation project
 - a replacement for official institutions
 
-## Data Philosophy
+## Content Constitution
 
-WorkConnect collects data to make life abroad more understandable.
-
-Data is valuable when it is:
-
-- useful
-- source-backed
-- understandable
-- relevant to foreign residents or movers
-- connected to a real user problem
-- reusable for guides, alerts, search, or future GPT answers
-
-Data is not valuable just because it was collected.
-
-Low-quality, irrelevant, unclear, or unsafe data should not be forced into public content.
-
-## Content Philosophy
-
-Public content should help users understand what matters and why.
-
-A good content item should answer:
+Public or reviewable content should answer:
 
 ```text
-What happened or what information exists?
-Why does it matter to someone living or working abroad?
+What information exists?
+Why does it matter to the target user?
 What should the user check or do next?
-Where is the original source?
+What source supports this?
 ```
 
-Content should be clear, calm, practical, and source-aware.
+Content should be calm, practical, source-aware, and clear about uncertainty.
 
-It should avoid clickbait, fear-based framing, overclaiming, or pretending to provide legal certainty.
+It must avoid clickbait, fear-based framing, legal overclaiming, and public use of internal diagnostic text.
 
-## Automation Philosophy
+## Automation Constitution
 
-Automation should support trust, not replace judgment.
+Automation may support:
 
-The system may automate:
+- collection
+- normalization
+- translation
+- summarization
+- duplicate detection
+- relevance scoring
+- content drafting
+- review queue preparation
 
-* collection
-* normalization
-* translation
-* summarization
-* duplicate detection
-* relevance scoring
-* content drafting
-* publishing queue preparation
+Automation must not replace judgment for:
 
-The system should be careful with:
+- legal or visa interpretation
+- sensitive incidents
+- official policy changes
+- weak or unclear sources
+- public publishing decisions that cross protected boundaries
 
-* legal or visa interpretation
-* sensitive incidents
-* official policy changes
-* weak or unclear sources
-* automatically publishing unverified content
-
-Automation should make the operator faster, but not make the product careless.
-
-## Architecture Implication
-
-Because WorkConnect is a global work-and-settlement information platform, the system should separate:
-
-```text
-global product model
-→ country-specific sources
-→ domain data
-→ normalized information
-→ publishable content
-→ user-facing delivery
-```
-
-The first implementation is Korea, but the structure should allow other countries to be added later.
-
-Korea-specific collectors, keywords, sources, and rules should not define the whole product identity.
+Automation should make the operator faster without making the product careless.
 
 ## Success Criteria
 
-WorkConnect is moving in the right direction if:
+WorkConnect is on course when:
 
-* users can understand foreign work and settlement information more easily
-* important information is collected from reliable sources
-* public content is practical and source-backed
-* country-specific systems can be added without rewriting the whole product
-* collected data can support social posts, admin review, guides, APIs, and future GPT answers
-* the system separates raw data, normalized data, content candidates, and published content
-* automation improves consistency without damaging trust
+- users understand foreign work and settlement information more easily
+- important information is collected from reliable sources
+- public content is practical and source-backed
+- country-specific systems can be added without changing the product constitution
+- raw data, normalized data, content candidates, and published output remain separated
+- low-value news, generic politics, travel rankings, economy noise, crypto, and generic lifestyle items are blocked unless they pass user-need and actionability gates
+- automation improves consistency without damaging trust

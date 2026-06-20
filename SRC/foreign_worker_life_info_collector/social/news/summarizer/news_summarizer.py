@@ -10,6 +10,8 @@ from ..models import NewsCandidate, NewsSummary
 
 LOCAL_LLAMA_ENDPOINT_ENV = "LOCAL_LLAMA_ENDPOINT"
 LOCAL_LLAMA_MODEL_ENV = "LOCAL_LLAMA_MODEL"
+OLLAMA_SUMMARY_KEEP_ALIVE_ENV = "OLLAMA_SUMMARY_KEEP_ALIVE"
+DEFAULT_SUMMARY_KEEP_ALIVE = "30s"
 
 
 class NewsSummarizer:
@@ -75,7 +77,7 @@ class NewsSummarizer:
                     "num_predict": int(os.getenv("OLLAMA_SUMMARY_NUM_PREDICT", "420")),
                     "num_ctx": int(os.getenv("OLLAMA_SUMMARY_NUM_CTX", os.getenv("OLLAMA_NUM_CTX", "1536"))),
                 },
-                "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "30s"),
+                "keep_alive": os.getenv(OLLAMA_SUMMARY_KEEP_ALIVE_ENV, DEFAULT_SUMMARY_KEEP_ALIVE),
             }
         ).encode("utf-8")
         request = Request(generate_url, data=body, headers={"Content-Type": "application/json"})

@@ -1,426 +1,181 @@
-# Product System Workflow
+# Growth Workflow and Correction Loop
 
 ## Purpose
 
-This document explains how WorkConnect grows from raw information collection into a reliable work-and-settlement information system.
+This document defines how WorkConnect grows from user need and source discovery into practical content, reusable knowledge, and safer future automation.
 
-It is not a low-level implementation guide.
+It controls workflow shape. It does not define every quality gate; detailed validation and classification rules live in `02_DATA_SOURCE_AND_QUALITY.md`.
 
-It defines the product workflow that collectors, databases, admin UI, content pipeline, automation, and future GPT interfaces should follow.
-
-## Core Workflow
+## Core Lifecycle
 
 WorkConnect follows this lifecycle:
 
 ```text
 user need
-→ source discovery
-→ source collection
-→ normalization
-→ domain classification
-→ user value evaluation
-→ content candidate
-→ publishing or review
-→ user reaction
-→ knowledge improvement
+-> source discovery
+-> raw collection
+-> normalization
+-> duplicate classification
+-> domain classification
+-> user value evaluation
+-> content candidate
+-> review eligibility
+-> public delivery or operation notification
+-> feedback
+-> knowledge improvement
 ```
 
-The system should not treat collection as the final goal.
+Collection is not the goal. The goal is practical, repeatable guidance for people working, living, studying, immigrating, or settling abroad.
 
-The goal is to turn scattered information into useful, repeatable guidance for people working, living, studying, or settling abroad.
+## User Need Before Source Collection
 
-## Growth Stages
+Before adding or promoting a source, ask:
 
-### Stage 1 — Source Discovery
+- Which target user does this help?
+- What practical uncertainty does it reduce?
+- What decision or next check does it support?
+- Is it relevant to the current target country and channel?
+- Is the source evidence strong enough for its intended use?
 
-Goal:
+If these questions cannot be answered, the source may remain a discovery signal but should not become public content.
 
-Find information sources that may help people working or settling abroad.
+## Workflow Stages
+
+### 1. Source Discovery
+
+Find possible information sources such as official agencies, employment services, visa pages, public notices, trusted media, support organizations, and practical living guides.
+
+Output: `source candidate`.
+
+### 2. Raw Collection
+
+Collect source evidence without losing original context.
+
+Output: `raw item`.
+
+Raw data is evidence and must not be overwritten by generated summaries.
+
+### 3. Normalization
+
+Normalize URL, title, body, language, country, source type, trust level, hash keys, and similarity keys.
+
+Output: `normalized item`.
+
+### 4. Duplicate Classification
+
+Classify repeated or similar data before promotion.
+
+Same URL repeat is usually noise. Same topic from multiple reliable sources may be signal.
+
+Output: `duplicate_noise`, `duplicate_signal`, or representative candidate.
+
+### 5. Domain Classification
+
+Place information into a WorkConnect domain such as work, visa, immigration, labor rights, occupation, housing, healthcare, banking, insurance, transportation, language, local support, public services, safety, or daily life.
+
+Output: `domain candidate`.
+
+### 6. User Value Evaluation
+
+Evaluate actionability, repeatability, target-user relevance, source reliability, freshness, sensitivity risk, and current country/channel fit.
+
+Output: `evaluated candidate`.
+
+### 7. Content Candidate Creation
+
+Create a reviewable or publishable object with title, summary, why it matters, target user, source link, category, status, quality score, and source reference.
+
+Output: `content candidate`.
+
+### 8. Review Eligibility
+
+Decide whether the item should be reviewed, blocked, archived, or prepared for safe publishing.
+
+Sensitive, legal, visa, weak-source, missing-body, or unclear-actionability items should default to review or block.
+
+### 9. Public Delivery or Operation Notification
+
+Public delivery and operation notification are separate.
+
+Facebook is public delivery. Telegram review/reporting is operation control. Admin UI is operator visibility.
+
+### 10. Feedback and Knowledge Improvement
+
+Use performance, review decisions, repeated topics, and operator feedback to improve future source selection, classification, guides, alerts, search, APIs, and GPT-assisted answers.
+
+## Correction Loop Before Patching
+
+When wrong content appears, do not start with one-to-one patching.
+
+First classify the failed lifecycle stage:
+
+```text
+source discovery
+-> raw collection
+-> normalization
+-> duplicate classification
+-> domain classification
+-> user value evaluation
+-> review eligibility
+-> public delivery
+```
+
+Patch the earliest failing layer.
 
 Examples:
 
-* official immigration pages
-* employment and labor agencies
-* job/occupation dictionaries
-* public service notices
-* reliable local news
-* housing, banking, healthcare, insurance, transportation guides
-* local support organizations
+- If a Google News RSS URL became a final link, fix URL validation/normalization before publisher behavior.
+- If generic politics entered review, fix domain classification or user value evaluation before one article title.
+- If internal status text appeared in a post, fix contamination gates before formatting.
+- If the same item repeatedly enters Telegram review, fix duplicate identity or review eligibility before message wording.
 
-Output:
+## Workflow Trigger Points
 
-```text
-source candidate
-```
+Stop, downgrade, review, or archive when:
 
-A source candidate is not yet trusted content.
+- source evidence is missing
+- source body is missing or only diagnostic text
+- URL is a search/RSS/root/redirect instead of a usable source page
+- the topic is generic international news, travel ranking, politics, economy, crypto, or lifestyle without direct user actionability
+- source trust is weak for legal, visa, labor, medical, financial, or safety claims
+- duplicate type is unclear
+- current target country/channel fit is unclear
+- public delivery would cross a protected boundary
 
-### Stage 2 — Collection
+## Representative Candidate Rule
 
-Goal:
+Duplicate data should not be blindly deleted.
 
-Collect source data without losing evidence.
+The system should select or preserve a representative candidate when:
 
-The system stores:
+- multiple sources report the same practical update
+- one official source confirms a media signal
+- multiple user-signal sources point to the same unmet need
 
-* original URL
-* source name
-* original title
-* original summary or body
-* published date if available
-* collected date
-* language
-* raw payload
+Representative selection must preserve source references and duplicate context.
 
-Output:
+## Feedback and Knowledge Improvement
 
-```text
-raw item
-```
+The growth loop should gradually produce:
 
-Raw data is evidence and should not be overwritten by generated summaries.
+- source quality improvements
+- topic clusters
+- country-specific guides
+- visa/work/life knowledge base
+- settlement checklists
+- occupation and domain readiness hints
+- recurring update topics
+- safer review and publishing rules
 
-### Stage 3 — Normalization
-
-Goal:
-
-Convert collected data into a consistent internal format.
-
-The system normalizes:
-
-* canonical URL
-* clean title
-* clean text
-* language
-* source type
-* country
-* category
-* hash key
-* similarity key
-* source trust level
-
-Output:
-
-```text
-normalized item
-```
-
-Normalization makes data comparable across sources and countries.
-
-### Stage 4 — Domain Classification
-
-Goal:
-
-Place normalized data into the correct domain.
-
-Main domains:
-
-* work
-* visa
-* immigration
-* labor rights
-* occupation
-* housing
-* healthcare
-* banking
-* insurance
-* transportation
-* language
-* local support
-* public services
-* daily life
-
-Output:
-
-```text
-domain candidate
-```
-
-A domain candidate belongs to a specific information area.
-
-### Stage 5 — User Value Evaluation
-
-Goal:
-
-Decide whether the information is useful for WorkConnect users.
-
-The system evaluates:
-
-* target user relevance
-* work or settlement relevance
-* actionability
-* repeatability
-* subscription value
-* source reliability
-* freshness
-* sensitivity risk
-* country relevance
-
-Important principle:
-
-```text
-A country-related article is not automatically WorkConnect-relevant.
-```
-
-The information must help someone work, live, study, immigrate, settle, or access support in the target country.
-
-Output:
-
-```text
-evaluated candidate
-```
-
-### Stage 6 — Content Candidate Creation
-
-Goal:
-
-Turn useful domain data into a publishable or reviewable content object.
-
-The system creates:
-
-```text
-content candidate
-```
-
-A content candidate should contain:
-
-* title
-* summary
-* why it matters
-* target persona
-* source link
-* category
-* publish score
-* review status
-* source reference
-
-Content candidates are the bridge between internal data and public delivery.
-
-### Stage 7 — Publishing or Review
-
-Goal:
-
-Decide whether content should be published automatically, reviewed manually, or skipped.
-
-Possible outcomes:
-
-```text
-publish
-review required
-sensitive review required
-skip
-archive
-```
-
-Automatic publishing is allowed only when:
-
-* the source is valid
-* the link is valid
-* the content is useful
-* the language is safe
-* the topic is not sensitive
-* the post does not contain operational text
-* the content fits WorkConnect’s product identity
-
-### Stage 8 — Delivery
-
-Goal:
-
-Deliver content through the right channel.
-
-Initial delivery channels:
-
-* Facebook Page
-* Telegram operation notifications
-* admin UI
-
-Future channels:
-
-* website
-* email
-* PDF guide
-* GPT interface
-* API
-* personalized alert
-
-Public delivery and operation notification must be separated.
-
-### Stage 9 — Reaction and Feedback
-
-Goal:
-
-Use user reactions to improve content strategy.
-
-Signals:
-
-* views
-* clicks
-* reactions
-* comments
-* shares
-* saves if available
-* subscription conversion
-* repeated topic interest
-
-Important lesson:
-
-```text
-News can create reach.
-Repeatable practical guidance creates subscription value.
-```
-
-The system should learn which content types produce real user value, not only views.
-
-### Stage 10 — Knowledge Improvement
-
-Goal:
-
-Turn collected data and user reaction into better future guidance.
-
-The system should gradually build:
-
-* topic clusters
-* country-specific guides
-* visa/work/life knowledge base
-* occupation-to-visa hints
-* settlement checklists
-* user persona mappings
-* recurring update topics
-
-Output:
-
-```text
-reusable knowledge
-```
-
-## Workflow Shape
-
-WorkConnect is not a single linear pipeline.
-
-It is a growth loop.
-
-```text
-collect
-→ normalize
-→ classify
-→ evaluate
-→ publish/review
-→ observe
-→ improve
-→ collect better
-```
-
-Each loop should improve:
-
-* source quality
-* content quality
-* user relevance
-* publishing safety
-* subscription value
-
-## Stage Priority
-
-Early product stages should prioritize:
-
-```text
-source reliability
-data structure
-content usefulness
-admin visibility
-safe automation
-```
-
-Later stages can add:
-
-```text
-personalization
-paid subscription
-country expansion
-GPT answers
-automated guide generation
-multi-language delivery
-```
-
-## What This Means for Automation
-
-Automation should not blindly complete the pipeline.
-
-Automation should be allowed to stop when:
-
-* source quality is weak
-* relevance is low
-* topic is sensitive
-* link is invalid
-* content is not useful
-* protected system areas would be changed
-* the task crosses workflow boundaries
-
-A stopped automation with a clear report is better than a completed automation that damages trust.
-
-## What This Means for DB
-
-The DB should preserve lifecycle boundaries.
-
-```text
-raw item
-→ normalized item
-→ domain candidate
-→ content candidate
-→ publish log
-→ feedback/performance data
-```
-
-Source data and publishable content should not be mixed.
-
-## What This Means for Admin UI
-
-The admin UI should show where each item is in the workflow.
-
-Examples:
-
-* collected
-* normalized
-* classified
-* evaluated
-* ready to review
-* ready to publish
-* published
-* skipped
-* archived
-* failed
-
-The dashboard should show status and flow health, not raw table dumps.
-
-## What This Means for Content Strategy
-
-Content should move from news-heavy posting toward repeatable practical guidance.
-
-Examples:
-
-* visa checklist
-* job/occupation guide
-* housing preparation
-* banking guide
-* healthcare guide
-* labor rights guide
-* official policy update explainer
-* weekly work-and-life abroad digest
-
-News remains useful as a source signal, but it is not the product itself.
+News may create reach, but repeatable practical guidance creates long-term value.
 
 ## Success Criteria
 
-This workflow is working when:
+The workflow is healthy when:
 
-* collected data becomes reusable knowledge
-* content is useful beyond one-time news reading
-* users can understand what to do next
-* admin can see and control the system safely
-* automation can run without crossing protected boundaries
-* publishing improves trust rather than creating noise
-
-## Related Documents
-
-- `DOC/flowchart/flowchart-flow-audit.md`
-  - Use this as the detailed audit companion for the product workflow.
-  - It expands the workflow into gate-level issues such as source validity, duplicate signal, user value evaluation, content candidate promotion, publishing safety, and feedback loops.
+- collected data becomes reusable knowledge
+- content remains useful beyond one-time news reading
+- admins can see where an item is in the lifecycle
+- automation stops before damaging trust
+- public delivery is separated from operation notification
+- bad outputs lead to lifecycle-level corrections, not only one-off patches

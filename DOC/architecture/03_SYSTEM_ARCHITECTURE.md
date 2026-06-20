@@ -1,331 +1,230 @@
-# System Architecture
+# System Boundary and Governance Map
 
 ## Purpose
 
-This document defines the high-level system architecture of WorkConnect.
+This document defines WorkConnect's high-level system boundaries, governance layers, and component responsibilities.
 
-WorkConnect is a practical information platform for people who move to another country to work, live, study, or settle.
-
-The first implementation target is Korea, but the system should be designed as a reusable country-based information platform.
-
-This document focuses on the major system components and how information flows between them.
+It protects the product from becoming only a social-posting automation system.
 
 ## High-Level Architecture
 
-WorkConnect is composed of five major layers.
+WorkConnect is organized as:
 
 ```text
-External Sources
-→ Backend + Local LLM
-→ Database / Content Management
-→ Admin Frontend
-→ Facebook Page
+external sources
+-> collectors and backend workflow
+-> database and content management
+-> admin UI and operation controls
+-> public delivery channels
+-> feedback and knowledge layer
 ```
 
-Current first channel:
+Current runtime is local before production deployment.
 
-Facebook Page: WorkConnect Korea
+Current active public channel is Facebook Page: WorkConnect Korea.
 
-Current admin channel:
+Current operator channel is the local admin web UI.
 
-Local admin web UI
+## Governance Layer
 
-Current runtime:
+Central governance defines product purpose and boundaries.
 
-Local PC before production deployment
+Module harnesses execute within those boundaries.
+
+```text
+product constitution
+-> growth workflow
+-> data quality and classification
+-> system boundary
+-> runtime safety
+-> Codex harness
+-> work area registry
+```
+
+Module code or module documentation must not redefine the product purpose.
+
+## Document-to-Layer Control Map
+
+- `00_PRODUCT_NORTH_STAR.md`: product purpose and classification worldview
+- `01_SYSTEM_GROWTH_WORKFLOW.md`: lifecycle, growth loop, correction loop
+- `02_DATA_SOURCE_AND_QUALITY.md`: validation gates and classification triggers
+- `03_SYSTEM_ARCHITECTURE.md`: component ownership and governance map
+- `04_LOCAL_DEVELOPMENT_RUNTIME_GUIDE.md`: local runtime safety and runtime triggers
+- `05_CODEX_HARNESS_GUIDE.md`: Codex operating harness
+- `06_WORK_AREA_REGISTRY.md`: module harness boundaries
+
+## Document Authority Map
+
+- `DOC/architecture/00` through `DOC/architecture/06`: active governance and active harness rules
+- `DOC/architecture/07`: review reference and restructure rationale, not the primary execution rule set
+- `DOC/correction-loop`: backlog and promotion candidates, not active implementation permission
+- `DOC/to-be`: future plans, not approval to implement
+- `DOC/walkthrough`: task history and reports
+- `DOC/archives`: historical snapshots, not active rules
+- `DOC/database`: DB reference and planning docs; implementation still requires task approval
+
+Codex must not treat backlog, to-be, walkthrough, archive, database-reference, or review-reference documents as permission to implement.
+
+## Module Harness Map
+
+Work areas in `06_WORK_AREA_REGISTRY.md` are module harnesses.
+
+Examples:
+
+- `SOCIAL_NEWS_COLLECTOR`: collects and preserves source evidence
+- `SOCIAL_NEWS_CANDIDATE`: normalizes, deduplicates, scores, and classifies news candidates
+- `CONTENT_QUEUE`: manages reviewable/publishable content candidates
+- `IMMIGRATION_DOMAIN`: handles official immigration/visa information with review sensitivity
+- `LIVING_DOMAIN`: handles practical settlement/lifestyle information
+- `FACEBOOK_PUBLISHER`: protected public delivery behavior
+- `TELEGRAM_REPORTING`: operation notification and review reporting
+- `SCHEDULER_BOT_STATE`: protected recurring automation and bot state
 
 ## Main Components
 
-### 1. Facebook Page
+### External Sources
 
-The Facebook Page is the first public delivery channel.
+External sources include official agencies, public portals, employment APIs, occupation dictionaries, immigration pages, trusted media, RSS/search sources, support organizations, and practical living guides.
 
-Current page:
+Sources are not trusted as-is. They must pass validation, normalization, classification, and quality gates.
 
-WorkConnect Korea
+### Backend
 
-Role:
+Backend responsibilities:
 
-publish selected content
-test public reaction
-collect early audience signals
-expose useful work/life/settlement information
-drive future subscription or service conversion
+- expose admin APIs
+- run collection pipelines
+- normalize sources
+- validate data quality
+- classify source/domain data
+- manage content candidates
+- store logs and status
+- preserve source evidence
+- protect publishing and scheduler boundaries
+- call Local LLM only as optional advisory support
+- send operation summaries if enabled
 
-Important:
+The backend validates and controls workflow, but protected publishing behavior cannot be changed casually.
 
-Facebook is a delivery channel, not the core product.
+### Database and Content Management
 
-The core product is the structured information system behind it.
+The database should preserve lifecycle boundaries:
 
-### 2. Admin Frontend
+```text
+raw/source data
+-> normalized/domain data
+-> content candidates
+-> review/publish state
+-> publish logs
+-> feedback/performance data
+```
 
-The admin frontend is the operator control screen.
+Source/domain data and publishable content must not be collapsed into the same responsibility.
 
-Role:
+### Admin UI
 
-show collected data
-show content candidates
-show publishing status
-show Facebook token/status
-show bot and scheduler status
-show Local LLM status
-allow manual review, editing, and additional publishing
-make the whole workflow visible and controllable
+Admin UI is the operator cockpit.
 
-The admin UI should prioritize intuitive data inspection.
+It should show:
 
-An operator should be able to quickly understand:
+- what was collected
+- what was normalized
+- what became content
+- what was blocked or skipped
+- what needs review
+- what was published
+- what failed
+- bot, scheduler, Facebook, Telegram, and Local LLM status
 
-what was collected
-what was normalized
-what became content
-what was skipped
-what was published
-what failed
-what needs review
-3. Backend
+Admin UI should expose workflow health, not hide it behind raw table dumps.
 
-The backend connects the admin UI, database, collectors, Local LLM, and publishing channels.
+### Local LLM
 
-Role:
-
-expose admin APIs
-run collection pipelines
-normalize sources
-validate data quality
-manage content candidates
-control publishing
-store logs
-check Facebook token/page status
-communicate with Local LLM when needed
-send Telegram operation summaries if enabled
-
-The backend should protect the system from unsafe automation.
-
-It should not publish low-quality, broken, duplicated, or irrelevant data only because it was collected.
-
-4. Local LLM
-
-Local LLM is an optional helper.
-
-Role:
-
-semantic duplicate check
-relevance check
-summary quality check
-sensitive topic detection
-content drafting support
-
-Local LLM must not be required for the system to run.
-
-If Local LLM is unavailable, the backend should fall back to deterministic rules.
-
-Local LLM should support the workflow, not control final publishing by itself.
-
-5. External Data Sources
-
-WorkConnect collects information from multiple source types.
-
-Examples:
-
-government APIs
-country information APIs
-immigration and visa websites
-employment and occupation APIs
-Naver
-Google
-RSS feeds
-official public agency pages
-trusted media
-local support organizations
-
-Each source may have a different format, language, reliability level, and content depth.
-
-Therefore, every source must pass through normalization and quality checks before it becomes content.
-
-Basic Data Flow
-
-The system should follow this flow.
-
-source discovery
-→ raw collection
-→ source normalization
-→ duplicate/source normalization
-→ domain classification
-→ quality evaluation
-→ content candidate
-→ admin review or automatic publishing
-→ Facebook publishing
-→ operation/performance logging
-
-This flow should apply to all major information domains:
-
-news
-living information
-immigration information
-occupation information
-employment/job information
-Source Normalization
-
-Sources are not trusted as-is.
-
-The backend should normalize:
-
-source URL
-canonical URL
-title
-body text
-language
-country
-category
-source trust level
-published date
-collected date
-hash key
-similarity key
-
-The system should distinguish:
-
-discovery URL
-source URL
-canonical URL
-publishable link URL
-
-For example, Google News RSS may help discover a topic, but it should not automatically become the final publishable link.
-
-Content Management Layer
-
-All publishable information should flow into the content management layer.
-
-The content management layer is responsible for:
-
-listing content candidates
-showing source reference
-showing quality status
-showing publishing readiness
-allowing admin edits
-allowing manual publish
-supporting automatic publish
-storing publish results
-
-First stage:
-
-automatic publishing for safe, high-confidence content
-
-Second stage:
-
-admin intervention for review, editing, additional publishing, or republishing
-
-The goal is not only to automate posting, but to give the operator clear control over the full content pipeline.
-
-Facebook Token and Publishing Status
-
-Because Facebook is the first public delivery channel, token and page status must be visible and validated.
-
-The system should track:
-
-token type
-token validity
-page match
-required permissions
-expiration status
-token fingerprint
-last validation time
-last publish error
-Meta error code/subcode/fbtrace_id when available
-
-The system must not collapse all Facebook failures into a generic token error.
-
-Facebook publishing should be blocked or reviewed when token status is unsafe or unknown.
-
-Admin Visibility Principle
-
-The admin frontend should not hide the workflow.
-
-Each data item should clearly show its current stage:
-
-collected
-normalized
-classified
-evaluated
-content candidate created
-ready to review
-ready to publish
-published
-skipped
-failed
-archived
-
-The admin should also see why an item was accepted, blocked, skipped, or promoted.
-
-Examples:
-
-Blocked: no usable article body
-Blocked: Google RSS link only
-Skipped: low user relevance
-Review: immigration/legal sensitivity
-Ready: high actionability and valid source
-Published: Facebook post created
-Automation Control
-
-Automation should be controllable.
-
-The system should support:
-
-automatic collection
-automatic normalization
-automatic candidate creation
-automatic publishing for safe items
-manual review for uncertain items
-manual republish or edit
-bot status visibility
-scheduler visibility
-stop or pause controls
-
-Automation must not silently cross system boundaries.
-
-If publishing, token, scheduler, auth, or protected areas fail, the system should stop or report clearly rather than continue blindly.
-
-Current Runtime Boundary
-
-Before production deployment, WorkConnect runs locally.
-
-This means:
-
-local frontend
-local backend
-local PostgreSQL
-local automation scheduler
-optional local LLM
-external Facebook/Telegram APIs
-
-Even though the admin system is local, Facebook publishing is external and public.
-
-Therefore, local development changes can affect real public output.
-
-Target Architecture Direction
-
-The system should evolve toward this structure.
-
-country-specific sources
-→ normalized domain data
-→ content management
-→ public/social publishing
-→ feedback/performance
-→ reusable knowledge base
-→ future GPT/API/subscription layer
-
-The first implementation is Korea, but the architecture should keep country-specific rules separate from the global product model.
-
-Key Architecture Principles
-Facebook is a channel, not the product.
-Admin frontend is the operator cockpit.
-Backend owns validation, normalization, and workflow control.
 Local LLM is optional and advisory.
-External sources must be normalized before use.
-Source data and publishable content must stay separated.
-Content management is the bridge between data and public output.
-Automation must be visible and controllable.
-Facebook token and publish errors must be explicit.
-The system should remain expandable beyond Korea.
+
+It may support semantic duplicate checks, relevance checks, summary quality checks, sensitive topic detection, and drafting support.
+
+It must not be required for the system to run and must not control final publishing by itself.
+
+### Public Delivery Channels
+
+Facebook is public delivery.
+
+Future public channels may include website, email, PDF guide, API, GPT interface, and personalized alerts.
+
+## Public Delivery vs Operation Notification Boundary
+
+Facebook publishing and Telegram review/reporting are different pipeline stages.
+
+```text
+Facebook = public delivery
+Telegram = operation control / review / reporting
+Admin UI = operator visibility and manual control
+```
+
+Telegram approval or reporting must not be treated as public publishing.
+
+Public publishing must not happen only because an operation notification succeeded.
+
+## Source Data vs Publishable Content Boundary
+
+Source schemas collect, preserve, normalize, and classify evidence.
+
+Content management owns final reviewable or publishable content objects, including final message, final link, validation state, approval state, and publish state.
+
+Target architecture:
+
+- content management should own the final public message
+- content management should own the final publishable link
+- source/domain tables should preserve and classify evidence
+- publisher modules should publish only final approved or reviewable content objects
+
+Known ambiguity to preserve for future audit:
+
+```text
+social_news.candidate
+vs
+content.content_candidate
+```
+
+The intended direction is that `content.content_candidate` acts as the final publishable content object, but this document does not resolve current implementation ownership.
+
+Do not change publisher behavior based only on this target boundary. First run the future ownership audit.
+
+## Facebook as Channel, Not Product
+
+Facebook is the first public delivery channel for WorkConnect Korea.
+
+It is not the product.
+
+The product is the structured, source-backed information system behind it.
+
+Facebook token, page, payload, frequency, retry, and selection behavior are protected areas.
+
+## Target Architecture Direction
+
+WorkConnect should evolve toward:
+
+```text
+country-specific sources
+-> normalized domain data
+-> content management
+-> review and public delivery
+-> feedback/performance
+-> reusable knowledge base
+-> future GPT/API/subscription layer
+```
+
+The architecture must remain expandable beyond Korea and keep country-specific rules separate from global purpose.
+
+## Success Criteria
+
+The system boundary is healthy when:
+
+- Facebook remains a channel, not the product
+- Telegram remains operation control, not public delivery
+- backend validation prevents unsafe automation
+- source data and publishable content remain separated
+- Local LLM remains optional
+- protected publishing, scheduler, auth, and bot-state areas cannot be changed casually
+- Python and Java workflow ownership questions are handled by explicit future audits, not silent assumptions

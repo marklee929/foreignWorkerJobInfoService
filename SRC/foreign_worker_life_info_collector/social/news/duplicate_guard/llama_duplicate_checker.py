@@ -10,6 +10,8 @@ from ..models import NewsCandidate
 
 LOCAL_LLAMA_ENDPOINT_ENV = "LOCAL_LLAMA_ENDPOINT"
 LOCAL_LLAMA_MODEL_ENV = "LOCAL_LLAMA_MODEL"
+OLLAMA_DUPLICATE_KEEP_ALIVE_ENV = "OLLAMA_DUPLICATE_KEEP_ALIVE"
+DEFAULT_DUPLICATE_KEEP_ALIVE = "30s"
 
 
 class LlamaDuplicateChecker:
@@ -34,7 +36,7 @@ class LlamaDuplicateChecker:
                     "num_predict": int(os.getenv("OLLAMA_DUPLICATE_NUM_PREDICT", "120")),
                     "num_ctx": int(os.getenv("OLLAMA_DUPLICATE_NUM_CTX", "768")),
                 },
-                "keep_alive": os.getenv("OLLAMA_KEEP_ALIVE", "30s"),
+                "keep_alive": os.getenv(OLLAMA_DUPLICATE_KEEP_ALIVE_ENV, DEFAULT_DUPLICATE_KEEP_ALIVE),
             }
         ).encode("utf-8")
         request = Request(endpoint, data=body, headers={"Content-Type": "application/json"})

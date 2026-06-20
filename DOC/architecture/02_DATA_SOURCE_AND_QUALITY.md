@@ -1,217 +1,97 @@
-# Data Source and Quality
+# Data Quality and Classification Worldview
 
 ## Purpose
 
-This document defines how WorkConnect evaluates source data before it becomes content.
+This document defines how WorkConnect evaluates source data before it becomes reviewable or public content.
 
-WorkConnect collects information from many source types, but not every collected item is useful, safe, or publishable.
-
-The goal is to reduce low-quality data early, preserve reliable source evidence, and prevent broken system messages from becoming user-facing content.
-
-## Core Principle
-
-Data collection is not the final goal.
-
-A collected item becomes valuable only when it can help someone work, live, study, or settle in another country.
-
-Every item should pass through these checks:
+It separates two different decisions:
 
 ```text
-source validity
-→ content availability
-→ duplicate normalization
-→ domain relevance
-→ user need relevance
-→ quality gate
-→ content candidate
+validation = whether data is usable
+classification = what the data means inside WorkConnect
 ```
 
-## Supported Source Domains
+A valid article may still be irrelevant.
 
-WorkConnect currently handles or plans to handle these source domains:
+## Source Evidence Rule
 
-- news
-- living information
-- immigration information
-- occupation information
-- employment/job information
-
-Each source domain may have different collectors and tables, but all should follow the same quality flow.
-
-## Source Lifecycle
-
-### 1. Source Discovery
-
-The system may discover potential sources from:
-
-- official websites
-- public agency pages
-- trusted media
-- RSS feeds
-- search APIs
-- domain APIs
-- public datasets
-- manually added sources
-
-Discovery does not mean the item is valid content.
-
-### 2. Raw Source Collection
-
-The first collected record must preserve source evidence.
-
-Required source evidence:
+The first collected record must preserve source evidence:
 
 - source name
 - source URL
 - original URL if different
+- canonical URL if known
+- publishable link URL if known
 - original title
-- original summary if available
-- original body if available
-- published date if available
+- original summary or body when available
+- published date when available
 - collected date
 - source type
 - language
-- raw payload if available
-
-Raw source fields should not contain generated summaries, internal errors, or system fallback messages.
-
-### 3. Source Normalization
-
-After collection, the system should normalize:
-
-- canonical URL
-- resolved article/detail URL
-- source domain
-- title
-- body text
-- language
 - country
-- category
-- hash key
-- similarity key
-- source trust level
+- raw payload when available
 
-The system should distinguish:
+Raw source fields must not contain generated summaries, internal errors, or fallback messages as if they were source facts.
+
+## Source Trust Levels
+
+### Primary Sources
+
+Official or authoritative sources such as immigration agencies, labor ministries, employment agencies, public service portals, official visa pages, local governments, and official job or occupation APIs.
+
+Primary sources can support high-confidence guides and policy explainers, but sensitive claims may still require review.
+
+### Trusted Media Sources
+
+Reliable media sources that explain policy changes, public issues, or current events directly relevant to target users.
+
+Media is useful signal, not official policy.
+
+### Secondary Sources
+
+Support centers, NGOs, universities, public-service partners, banks, insurers, hospitals, housing guides, and community organizations.
+
+Secondary sources may support practical content when source-backed and checked against user need.
+
+### Discovery Sources
+
+Search snippets, Google News RSS, aggregators, community search results, forums, and Q&A pages.
+
+Discovery sources identify topics. They must not become final publish links unless the original usable source page is resolved.
+
+### Community and Forum Sources
+
+Community sources are user-need signals, not authoritative facts.
+
+Rules:
+
+- respect platform terms, robots rules, API policies, and access restrictions
+- do not collect private, closed, paywalled, or access-controlled content without explicit approval
+- do not store personal identifiers without a clear policy and anonymization rule
+- do not quote personal stories directly in public content
+- validate factual, legal, visa, labor, medical, financial, or safety claims against primary or trusted sources before publication
+
+## URL and Link Boundary
+
+The system must distinguish:
 
 - discovery URL
 - source URL
 - canonical URL
 - publishable link URL
 
-These should not be treated as the same thing.
-
-## Source Trust Levels
-
-### Primary Sources
-
-Official or authoritative sources.
-
-Examples:
-
-- immigration agencies
-- labor ministries
-- employment agencies
-- public service portals
-- official local government pages
-- official visa or resident support pages
-- official job/occupation APIs
-
-Primary sources can support high-confidence guides and policy explainers.
-
-### Trusted Media Sources
-
-Reliable media sources that explain current events or policy changes.
-
-Examples:
-
-- established local English-language media
-- national news agencies
-- reputable international media when directly related to the target country
-
-Media sources are useful, but they are not official policy sources.
-
-### Secondary Sources
-
-Useful but requiring validation.
-
-Examples:
-
-- support centers
-- NGOs
-- universities
-- public-service partners
-- bank, insurance, hospital, or housing guides
-- community organizations
-
-Secondary sources may become content if they are practical and source-backed.
-
-### Discovery Sources
-
-Sources used to find topics, not to publish directly.
-
-Examples:
-
-- Google News RSS
-- search result snippets
-- aggregator pages
-- public community search result pages
-- public forum or Q&A URLs
-
-Discovery sources should not become final publish links unless the real original article/detail URL and usable content are resolved.
-
-Discovery sources may identify user questions or emerging topics, but they do not automatically become publishable source evidence.
-
-### Community and Forum Sources
-
-Community, forum, social, and Q&A sources may be useful for discovering user concerns.
-
-Examples:
-
-- Reddit posts or comments
-- Quora questions
-- public forum threads
-- public blog comments
-- public Facebook group links when access and terms allow
-
-Rules:
-
-- Treat these as user-need signals, not authoritative facts.
-- Respect platform terms, robots rules, API policies, and login/access restrictions.
-- Do not collect private, closed-group, paywalled, or access-controlled content without explicit approval.
-- Do not store personal identifiers unless there is a clear policy and anonymization rule.
-- Do not quote personal stories directly in public content.
-- Convert findings into anonymized topic patterns, FAQs, or content ideas.
-- Validate any factual, legal, visa, labor, medical, financial, or safety claim against primary or trusted sources before publishing.
-
-Community sources should usually flow through:
-
-```text
-discovery signal
--> topic candidate
--> source-backed validation
--> content candidate
-```
-
-They should not bypass source trust and quality gates.
-
-## Data Quality Gates
-
-### Gate 1 - Source URL Validity
-
-The item must have a usable source URL.
-
-Block or review if:
+Block or review when:
 
 - URL is empty
 - URL is only a search result
 - URL is a Google News RSS URL
 - URL is only a publisher root URL
 - URL is an unresolved redirect
-- URL cannot be tied to a real article, notice, or data page
+- URL cannot be tied to a real article, notice, guide, or data page
 
-### Gate 2 - Content Availability
+## Content Availability Gate
 
-The item must have enough content to summarize.
+A usable item needs enough content to summarize, classify, or cite.
 
 Acceptable:
 
@@ -219,31 +99,24 @@ Acceptable:
 - official notice body
 - structured API data
 - sufficient article summary
-- reliable metadata plus source link
+- reliable metadata plus source link when the source type supports it
 
 Not acceptable as user-facing content:
 
-- 저장된 기사 본문이 없습니다.
-- 일부 RSS/검색 결과는 원문 HTML 접근이 제한될 수 있습니다.
-- No article body was saved.
-- Content unavailable.
-- Failed to fetch article.
-- Parser error.
-- Access denied.
+- saved article body is missing
+- RSS/search result HTML access is restricted
+- No article body was saved
+- Content unavailable
+- Failed to fetch article
+- Parser error
+- Access denied
+- internal status, queue, threshold, or publish instructions
 
-These are system or collector messages.
+These may appear only in diagnostics, logs, admin-only notes, or stop reports.
 
-They may be stored in diagnostic fields, but they must never be copied into:
+## Duplicate Policy
 
-- summary
-- content body
-- Facebook message
-- why-it-matters
-- user-facing guide text
-
-### Gate 3 - Duplicate and Source Normalization
-
-The system should identify duplicate or near-duplicate data before content creation.
+Duplicate data should be classified, not blindly deleted.
 
 Duplicate types:
 
@@ -253,168 +126,208 @@ Duplicate types:
 - same title different source
 - syndicated copy
 - same topic different article
+- same practical issue across multiple sources
 
-Duplicate data should not be deleted automatically.
+Rule:
 
-It should be classified.
-
-Important rule:
-
-- same URL repeat = noise
-- same topic from multiple sources = signal
+```text
+same URL repeat = usually noise
+same topic from multiple reliable sources = possible signal
+```
 
 Only representative or meaningfully distinct items should become content candidates.
 
-### Gate 4 - Domain Relevance
+## Classification Principle
 
-The item must belong to at least one WorkConnect domain.
+Classification is a product-worldview problem.
 
-Primary domains:
+An item belongs in WorkConnect only if it helps the target user make a practical decision, reduce uncertainty, access support, or understand a source-backed rule in the target country.
 
-- work
-- visa
-- immigration
-- labor rights
-- occupation
-- employment
-- housing
-- healthcare
-- banking
-- insurance
-- transportation
-- language
-- local support
-- public services
-- daily life
+Generic country-related content is not enough.
 
-A country-related article is not automatically WorkConnect-relevant.
+Usually block or downgrade:
 
-For example:
+- generic international news
+- travel rankings
+- domestic politics without settlement impact
+- economy or stock-market news without user actionability
+- crypto news
+- generic lifestyle or tourism content
+- social media trends without source-backed practical value
+- weak-source claims about legal, visa, labor, medical, financial, or safety issues
 
-- local election strategy article: usually not relevant
-- stock market milestone article: low relevance / economy context only
-- visa eligibility update: relevant
-- foreign worker labor rights notice: relevant
-- housing contract guide: relevant
+Potentially relevant:
 
-### Gate 5 - User Need Relevance
-
-The item should help answer a real user question.
-
-Examples:
-
-- Can I work there?
-- What visa or permit do I need?
-- What should I prepare?
-- What rights or risks should I know?
-- Where can I get help?
-- How do I handle daily life after arrival?
-
-If it does not help answer one of these, it should not become high-priority content.
-
-### Gate 6 - Actionability and Repeatability
-
-WorkConnect should prioritize repeatable practical guidance over one-time news.
-
-High-value examples:
-
-- visa checklist
-- employment document guide
-- housing contract warning
+- visa or stay-status update
+- labor rights notice
+- housing contract guide
 - health insurance explanation
-- labor rights steps
-- occupation guide
+- banking or telecom setup guide
+- local public service or support guide
 - official policy explainer
+- safety information tied to living, working, or settling in the target country
 
-Lower-value examples:
+## Quality Trigger Cards
 
-- general politics
-- generic economy news
-- stock market movement
-- celebrity/lifestyle news
-- one-time human interest story without practical guidance
+### Trigger: Invalid Link
 
-News can create reach.
+Condition: final link is missing, RSS/search-only, root-only, or unresolved.
 
-Repeatable practical guidance creates subscription value.
+Action: block or review; do not publish.
 
-## Minimal LLM Validation Policy
+### Trigger: Missing Body
 
-LLM validation should be used carefully.
+Condition: source body or reliable structured content is missing.
 
-The system should not call an LLM for every item if deterministic rules can reject or classify the item first.
+Action: mark content missing; do not create public summary from diagnostic text.
 
-### Preferred Validation Order
+### Trigger: System Text Contamination
+
+Condition: internal status, queue, threshold, error, or publish-operation text appears in user-facing fields.
+
+Action: block candidate and fix earliest contamination layer.
+
+### Trigger: Generic Low-Value Topic
+
+Condition: generic politics, economy, crypto, travel, international ranking, or lifestyle item lacks direct user need/actionability.
+
+Action: downgrade, skip, or store only as reference signal.
+
+### Trigger: Target Country Mismatch
+
+Condition: item is global, non-Korea, generic international, future-market-only, or not directly tied to the current target country/channel.
+
+Action: do not send to WorkConnect Korea public review or publishing by default. Store as future/global reference signal, downgrade, archive, or require explicit review depending on source value. Make target country/channel fit visible in the candidate or review reason.
+
+Do not promote to Korea public content only because it mentions foreigners, travel, international affairs, or general safety.
+
+### Trigger: Sensitive Domain
+
+Condition: visa, immigration, labor rights, medical, financial, safety, or legal meaning is unclear.
+
+Action: require review and prefer primary sources.
+
+### Trigger: Weak Source
+
+Condition: source is community, aggregator, snippet, or unclear authority for factual claims.
+
+Action: use as discovery signal only until validated.
+
+## Domain Duplicate Policy
+
+Duplicate rules may differ by domain:
+
+- News: duplicate article noise should be suppressed; same topic across trusted sources may increase signal.
+- Immigration: official duplicate or revised notices should preserve official source lineage and default to review.
+- Living information: repeated user questions may indicate guide demand, but public content still needs source-backed validation.
+- Occupation: dictionary rows are reference data, not job postings; duplicates should preserve code/source identity.
+- Jobs: listings require source, employer/listing source, date, and availability status.
+
+## Review Eligibility Execution Card
+
+Trigger: item passes validation but public suitability is uncertain.
+
+Action:
+
+```text
+check source trust
+-> check target country/channel fit
+-> check user need and actionability
+-> check sensitivity
+-> check duplicate state
+-> send to review, block, or archive
+```
+
+Do not touch:
+
+- Facebook publisher payload
+- scheduler frequency
+- auth/device approval
+- destructive DB state
+
+Verify:
+
+- review reason is visible
+- source reference is preserved
+- public fields contain no diagnostic text
+
+## Signal to Source-Backed Content Execution Card
+
+Use when data comes from a discovery source, community signal, forum, search result, aggregator, RSS snippet, or trend signal.
+
+Steps:
+
+```text
+classify as signal first
+-> identify primary, trusted media, or practical secondary source validation
+-> preserve anonymized topic/user-need signal when useful
+-> create public content candidate only after source-backed validation exists
+```
+
+Do not:
+
+- treat signal-only data as authoritative fact
+- quote personal or community content directly in public content
+- promote signal-only data to public review or publishing
+
+Verify:
+
+- source-backed validation is recorded or the item remains a signal
+- public fields do not imply authority that the source does not have
+
+## System Message Contamination Policy
+
+Internal messages must never appear in:
+
+- Facebook posts
+- public summaries
+- why-it-matters text
+- guide content
+- generated card text
+- user-facing content candidate body
+
+Internal messages may appear only in:
+
+- diagnostic fields
+- error logs
+- admin-only notes
+- pipeline logs
+- stop reports
+
+## LLM Validation Policy
+
+Use deterministic validation before LLM validation.
+
+Preferred order:
 
 ```text
 rule-based validation
 -> metadata validation
 -> duplicate/hash validation
 -> source/domain scoring
--> local LLM validation only if needed
--> external or larger LLM only if explicitly allowed
+-> local LLM advisory check only if needed
+-> external/larger LLM only if explicitly allowed
 ```
 
-### Use Local LLM For
-
-Local LLM can be used for limited advisory checks:
+Local LLM may assist with:
 
 - unclear domain classification
-- semantic duplicate check
-- user need relevance check
+- semantic duplicate checking
+- user-need relevance
 - sensitive topic detection
-- summary quality check
-- whether article can become a checklist/guide
+- summary quality checks
+- guide/checklist potential
 
-### Do Not Use Local LLM For
+Local LLM must not:
 
-- validating secrets
-- deciding final legal meaning
-- overriding official source text
-- publishing directly
-- replacing deterministic URL/content validation
-- processing every low-value item
+- validate secrets
+- decide final legal meaning
+- override official source text
+- replace deterministic URL/body validation
+- process every low-value item
+- publish directly
 
-### Local LLM Failure Rule
-
-If local LLM is unavailable:
-
-- fallback to deterministic rules
-
-The pipeline must not fail only because local LLM is unavailable.
-
-## System Message Contamination Policy
-
-Internal messages must never appear in user-facing fields.
-
-Forbidden user-facing text examples:
-
-- 저장된 기사 본문이 없습니다.
-- 일부 RSS/검색 결과는 원문 HTML 접근이 제한될 수 있습니다.
-- 관리자 재게시 요청으로 즉시 Facebook 게시를 시도했습니다.
-- 게시 기준 40점 이상을 충족했습니다.
-- 현재 점수:
-- READY_TO_PUBLISH
-- candidate
-- queue
-- threshold
-- publish_status
-- Facebook 게시를 시도
-
-These messages belong only in:
-
-- diagnostic fields
-- error logs
-- admin-only notes
-- pipeline logs
-
-They must not appear in:
-
-- Facebook posts
-- content summaries
-- why-it-matters text
-- public guides
-- generated content fields
+If Local LLM is unavailable, use deterministic fallback. The pipeline must not fail only because Local LLM is unavailable.
 
 ## Content Candidate Readiness
 
@@ -425,13 +338,15 @@ A source item can become a content candidate only when it has:
 - meaningful title
 - usable content or structured data
 - domain category
-- user relevance
+- target country/channel fit
+- target user relevance
 - source trust level
 - duplicate classification
 - language status
 - safety status
+- review or publish readiness status
 
-A content candidate should include:
+Recommended candidate fields:
 
 - source_domain
 - source_type
@@ -454,155 +369,15 @@ A content candidate should include:
 - raw_ref_table
 - raw_ref_id
 
-## Domain-Specific Quality Notes
-
-### News
-
-News should be treated as a signal source.
-
-News items should not be published only because they are fresh.
-
-They should be evaluated for:
-
-- foreign resident relevance
-- work/settlement impact
-- user actionability
-- repeated future value
-- sensitivity risk
-
-### Living Information
-
-Living information should be practical and reusable.
-
-Examples:
-
-- housing
-- banking
-- healthcare
-- insurance
-- transportation
-- local support
-- language support
-
-A living item should explain what the user can do or check.
-
-### Immigration Information
-
-Immigration information should prefer official sources.
-
-Because visa and stay status information can be sensitive, unclear items should default to review-required.
-
-Generated text should not overstate legal certainty.
-
-### Occupation Information
-
-Occupation data is reference/dictionary data.
-
-It should not be treated as job posting data.
-
-Before becoming content, it may need:
-
-- English name
-- keyword enrichment
-- possible visa relevance
-- industry tags
-- foreign worker fit
-- content readiness flag
-
-### Employment / Job Information
-
-Employment data should distinguish:
-
-- job posting
-- job category
-- occupation dictionary
-- employment policy
-- labor market article
-
-Job posting data must include clear source, employer or listing source, date, and availability status.
-
-## Content Management Goal
-
-All validated source/domain items should flow into the content management layer when appropriate.
-
-The content management layer should allow:
-
-- automatic publishing for safe high-confidence items
-- manual review for sensitive or uncertain items
-- admin editing
-- additional publishing
-- re-publishing with improved message
-- archiving
-- rejection
-- performance tracking
-
-The first goal is automated operation.
-
-The second goal is admin-controlled improvement.
-
-## Quality Status
-
-Recommended quality statuses:
-
-- RAW_COLLECTED
-- NORMALIZED
-- SOURCE_INVALID
-- CONTENT_MISSING
-- DUPLICATE_NOISE
-- DUPLICATE_SIGNAL
-- LOW_RELEVANCE
-- LOW_USER_NEED
-- REVIEW_REQUIRED
-- READY_FOR_CONTENT
-- CONTENT_CANDIDATE_CREATED
-- CONTENT_INVALID
-- READY_TO_PUBLISH
-- PUBLISHED
-- ARCHIVED
-
-Status names may differ by implementation, but the meaning should remain separated.
-
-Do not mix:
-
-- source collection status
-- content readiness status
-- publishing status
-- operation error status
-
-## Admin Visibility
-
-The admin UI should show why an item was blocked or promoted.
-
-Examples:
-
-- Blocked: Google RSS link only
-- Blocked: no usable body
-- Blocked: domestic politics, no settlement relevance
-- Review: official immigration notice
-- Promoted: high actionability visa checklist candidate
-- Promoted: living guide with official source
-
-Admins should not have to infer quality reasons from raw logs.
-
 ## Success Criteria
 
-This quality system is working when:
+The quality system is working when:
 
-- broken article body messages do not appear in public content
-- Google RSS links are not used as final publish links
-- duplicate rows are classified rather than blindly deleted
-- political/economy/general news is filtered unless user-relevant
-- official immigration content is handled carefully
+- broken body messages never become public content
+- Google RSS/search links are not final publish links
+- duplicate rows are classified as noise or signal
+- generic politics, economy, travel, crypto, and lifestyle content are filtered unless user-relevant and actionable
+- official immigration and labor content is handled carefully
 - occupation data is not mistaken for job postings
-- local LLM is used only when useful
-- content management receives useful publishable candidates
-- admin can see why an item was accepted, blocked, or reviewed
-
-## Related Documents
-
-- `DOC/flowchart/flowchart-flow-audit.md`
-  - See Findings 2, 3, 4, and 5 for the source/data quality issues that this document must enforce:
-    - URL lifecycle separation
-    - content missing as terminal validation
-    - duplicate noise vs duplicate signal
-    - user value and subscription-oriented scoring
+- Local LLM is optional and advisory
+- admins can see why an item was accepted, blocked, or sent to review

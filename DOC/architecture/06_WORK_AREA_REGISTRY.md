@@ -1,63 +1,98 @@
-# Work Area Registry
+# Work Area Registry and Module Harness Map
 
 ## Purpose
 
 This document defines WorkConnect work areas for Codex harness tasks.
 
-Each work area defines:
-
-- purpose
-- allowed files
-- forbidden files
-- allowed changes
-- forbidden changes
-- risk level
-- required checks
-- stop conditions
-
-Codex must use this document before starting any automated task.
+Each work area is a module harness. It inherits product governance from `00`, workflow rules from `01`, quality/classification rules from `02`, system boundaries from `03`, runtime safety from `04`, and agent operation rules from `05`.
 
 ## Risk Levels
 
 ### LOW
 
-Safe for unattended or semi-attended harness runs.
+Safe for documentation, read-only reports, display-only UI text, small status presentation improvements, and low-risk non-runtime clarification.
 
-Examples:
+### LOW-MEDIUM
 
-- documentation
-- UI label changes
-- read-only reports
-- pagination
-- summary query optimization
+Usually safe with focused scope and verification. Examples: dashboard status display, Telegram summary formatting, content card preview rules.
 
 ### MEDIUM
 
-Allowed with guarded fix mode and verification.
+Requires guarded scope and verification. Examples: repository query logic, validation logic, content queue status mapping, candidate quality gates.
 
-Examples:
+### MEDIUM-HIGH
 
-- repository query logic
-- validation logic
-- content queue status mapping
-- non-destructive migration
+Requires extra review and narrow execution. Examples: Facebook status/error classification, immigration review flows, sensitive domain rules.
 
 ### HIGH
 
-Requires user approval.
+Requires explicit user approval. Examples: auth, device approval, Facebook publisher, content publisher, scheduler, bot state, destructive migration, env/secrets, external publishing behavior.
 
-Examples:
+## Governance Inheritance Rule
 
-- auth
+No work area may override the product constitution.
+
+If a module finds content that is valid but not aligned with WorkConnect purpose, it must downgrade, review, archive, or preserve it as a reference signal instead of promoting it to public content.
+
+## Module Harness Rule
+
+Before work begins, select:
+
+```text
+PURPOSE FUNCTION
+AREA
+MODE
+FOCUS
+TIMEBOX
+```
+
+Then check:
+
+- allowed files
+- forbidden files
+- protected areas
+- verification plan
+- stop conditions
+
+## Multi-Responsibility File Rule
+
+Same file does not mean same work area.
+
+Codex may modify only the selected responsibility inside a multi-responsibility file.
+
+Large files such as Python admin servers or broad UI views may contain auth, bot controls, Telegram callbacks, LLaMA control, content sync, publishing, cleanup, and dashboards. A task may touch only the declared responsibility.
+
+## Work Modes Reference
+
+- `READ_ONLY_AUDIT`: inspect and report only
+- `DOC_ONLY`: documentation changes only
+- `LOW_RISK_FIX`: narrow low-risk implementation or display fix
+- `GUARDED_FIX`: guarded implementation with verification
+- `PROTECTED_CHANGE`: explicit approval required before editing
+
+Reporting language follows `DOC/architecture/05_CODEX_HARNESS_GUIDE.md`. Work reports should be written in Korean, while technical identifiers remain in their original form.
+
+## Protected Areas
+
+Protected areas must not be changed without explicit user approval:
+
+- admin auth
+- device approval
 - Facebook publisher
+- Facebook token handling
 - scheduler
-- bot state
-- destructive migration
-- external publishing behavior
+- bot state transitions
+- content publisher
+- destructive DB migration
+- env/secrets
+- external API behavior
+- automatic publishing selection
 
-## AREA: PRODUCT_DOCS
+## Work Areas
 
-Purpose: Product direction and architecture documentation.
+### AREA: PRODUCT_DOCS
+
+Purpose: product purpose, constitution, classification worldview.
 
 Allowed files:
 
@@ -65,55 +100,17 @@ Allowed files:
 DOC/architecture/00_PRODUCT_NORTH_STAR.md
 DOC/architecture/01_SYSTEM_GROWTH_WORKFLOW.md
 DOC/architecture/02_DATA_SOURCE_AND_QUALITY.md
-DOC/architecture/03_SYSTEM_ARCHITECTURE.md
 ```
 
-Allowed changes:
+Allowed: documentation-only clarification.
 
-- documentation only
-- clarify product purpose
-- clarify system flow
-- clarify data quality rules
+Forbidden: runtime code, DB changes, scheduler, publisher, auth, env/config.
 
-Forbidden changes:
+Risk: LOW.
 
-- runtime code
-- DB migration
-- env/config
-- scheduler
-- publisher
+### AREA: SYSTEM_ARCHITECTURE_DOCS
 
-Risk level: LOW
-
-## AREA: DB_ARCHITECTURE_DOCS
-
-Purpose: Database reference and to-be architecture documentation.
-
-Allowed files:
-
-```text
-DOC/database/
-```
-
-Allowed changes:
-
-- DB documentation
-- ERD reference
-- current/to-be notes
-- migration roadmap notes
-
-Forbidden changes:
-
-- actual migration execution
-- DB deletion
-- schema modification
-- code changes unless explicitly requested
-
-Risk level: LOW
-
-## AREA: SYSTEM_ARCHITECTURE_DOCS
-
-Purpose: System architecture, runtime boundary, data-flow, and component responsibility documentation.
+Purpose: component ownership, runtime boundary, data flow, governance map.
 
 Allowed files:
 
@@ -121,135 +118,59 @@ Allowed files:
 DOC/architecture/03_SYSTEM_ARCHITECTURE.md
 DOC/architecture/04_LOCAL_DEVELOPMENT_RUNTIME_GUIDE.md
 DOC/architecture/01_SYSTEM_GROWTH_WORKFLOW.md
-DOC/walkthrough/
 ```
 
-Allowed changes:
+Allowed: documentation-only boundary clarification.
 
-- clarify component ownership
-- document runtime boundaries
-- document source-to-content-to-publishing flow
-- record architecture conflicts and future code candidates
+Forbidden: runtime code, DB changes, server process changes, scheduler, Facebook publisher, admin auth.
 
-Forbidden changes:
+Risk: LOW.
 
-- runtime code
-- DB migration
-- server process changes
-- scheduler changes
-- Facebook publisher changes
-- admin auth changes
+### AREA: CODEX_HARNESS_DOCS
 
-Risk level: LOW
-
-## AREA: CODEX_HARNESS_DOCS
-
-Purpose: Codex harness operation rules, session cycle, stop gates, reporting format, and automation-preparation workflow.
+Purpose: Codex operating harness, stop gates, reporting, work-area registry.
 
 Allowed files:
 
 ```text
 DOC/architecture/05_CODEX_HARNESS_GUIDE.md
 DOC/architecture/06_WORK_AREA_REGISTRY.md
-DOC/walkthrough/
 ```
 
-Allowed changes:
+Allowed: documentation-only harness rule clarification.
 
-- clarify quick pre-review rules
-- clarify stop report rules
-- clarify code task candidate format
-- clarify session and six-hour reporting rules
-- document protected areas and required approvals
+Forbidden: runtime code, DB changes, env/secrets, external API calls, scheduler, commit/push automation behavior.
 
-Forbidden changes:
+Risk: LOW.
 
-- runtime code
-- DB changes
-- environment or secret files
-- external API calls
-- scheduler changes
-- commit/push automation code
+### AREA: TO_BE_DOCS
 
-Risk level: LOW
-
-## AREA: TO_BE_DOCS
-
-Purpose: Future-state plans and implementation candidates that are not yet approved for code work.
+Purpose: future plans and implementation candidates that are not approval to implement.
 
 Allowed files:
 
 ```text
 DOC/to-be/
-DOC/walkthrough/
+DOC/walkthrough/ when explicitly allowed
 ```
 
-Allowed changes:
+Forbidden: runtime implementation, DB schema changes, migrations, scheduler or publisher behavior.
 
-- add TODO notes
-- add deprecation notes
-- classify future work candidates
-- align future plans with current architecture and DB boundaries
+Risk: LOW.
 
-Forbidden changes:
+### AREA: DASHBOARD_STATUS
 
-- implementing the future plan
-- changing source code
-- changing DB schema
-- running migrations
-- changing scheduler or publisher behavior
+Purpose: dashboard summary/status display and lightweight status APIs.
 
-Risk level: LOW
-
-## AREA: DESIGN_ARCHIVE_DOCS
-
-Purpose: Legacy design review, archive/deprecated notes, and reference asset classification.
-
-Allowed files:
-
-```text
-DOC/design/
-DOC/archives/
-DOC/walkthrough/
-```
-
-Allowed changes:
-
-- mark old design docs as superseded or deprecated
-- record which current document absorbs each design
-- keep images, zip files, videos, and deck assets as reference assets
-
-Forbidden changes:
-
-- deleting reference assets without explicit instruction
-- changing runtime code
-- changing DB schema
-- changing publish or scheduler behavior
-
-Risk level: LOW
-
-## AREA: DASHBOARD_STATUS
-
-Purpose: Dashboard summary/status display and lightweight status APIs.
-
-Allowed files:
-
-```text
-SRC/foreign_worker_life_info_collector/api/*dashboard*
-SRC/foreign_worker_life_info_collector/admin_ui/src/*Dashboard*
-SRC/foreign_worker_life_info_collector/admin_ui/src/stores/*dashboard*
-SRC/foreign_worker_life_info_collector/admin_ui/src/components/*Status*
-```
-
-Allowed changes:
+Allowed:
 
 - summary count query
 - dashboard cache TTL
-- status card label
+- status card labels
 - recent status display
-- polling cleanup related to dashboard summary
+- dashboard-related polling cleanup
 
-Forbidden changes:
+Forbidden:
 
 - admin auth
 - Facebook publisher
@@ -259,8 +180,6 @@ Forbidden changes:
 - content selection logic
 - full list loading in dashboard
 
-Risk level: LOW-MEDIUM
-
 Required checks:
 
 - backend health
@@ -269,51 +188,31 @@ Required checks:
 - no heavy list API on dashboard load
 - polling interval cleanup
 
-## AREA: DASHBOARD_LOGS
+Risk: LOW-MEDIUM.
 
-Purpose: Recent logs displayed in dashboard/admin UI.
+### AREA: ADMIN_AUTH
 
-Allowed changes:
+Purpose: admin login, device approval, sessions, auth headers.
 
-- recent log limit
-- log display formatting
-- log level labels
-- log pagination
-- operation log read-only queries
-
-Forbidden changes:
-
-- pipeline execution logic
-- scheduler logic
-- bot state transition
-- auth
-- publisher
-
-Risk level: LOW
-
-## AREA: ADMIN_AUTH
-
-Purpose: Admin login, device approval, session, auth headers.
-
-Allowed changes: only with explicit user approval.
+Allowed: only with explicit user approval.
 
 Forbidden in unattended harness:
 
-- changing auth middleware
-- changing device approval logic
-- changing localStorage/session keys
-- changing admin secret headers
-- changing CORS auth behavior
+- auth middleware changes
+- device approval changes
+- localStorage/session key changes
+- admin secret header changes
+- CORS auth behavior changes
 
-Risk level: HIGH
+Risk: HIGH.
 
-Stop condition: any unrelated task requiring ADMIN_AUTH changes must stop.
+Stop: any unrelated task requiring `ADMIN_AUTH` changes must stop.
 
-## AREA: FACEBOOK_STATUS
+### AREA: FACEBOOK_STATUS
 
 Purpose: Facebook token/page status display and error classification.
 
-Allowed changes:
+Allowed:
 
 - token status display
 - token fingerprint display
@@ -322,29 +221,27 @@ Allowed changes:
 - Telegram failure summary formatting
 - status endpoint read-only validation
 
-Forbidden changes:
+Forbidden:
 
 - token refresh automation
-- changing actual publish payload
-- changing publish frequency
-- changing scheduler
-- storing raw access token
-- changing content selection
-
-Risk level: MEDIUM-HIGH
+- publish payload changes
+- publish frequency changes
+- scheduler changes
+- raw token storage/logging
+- content selection changes
 
 Required checks:
 
 - no raw token in logs
 - token type/status shown
-- Meta code/subcode/fbtrace_id preserved if available
-- failed publish is not collapsed into generic invalid token
+- Meta code/subcode/fbtrace_id preserved when available
+- failures are not collapsed into generic invalid-token errors
 
-## AREA: FACEBOOK_PUBLISHER
+Risk: MEDIUM-HIGH.
 
-Purpose: Actual Facebook publishing behavior.
+### AREA: FACEBOOK_PUBLISHER
 
-Allowed changes: only with explicit user approval.
+Purpose: actual Facebook publishing behavior.
 
 Includes:
 
@@ -355,15 +252,17 @@ Includes:
 - Page API call
 - token usage during publish
 
-Risk level: HIGH
+Allowed: only with explicit user approval.
 
-Stop condition: any unattended task requiring FACEBOOK_PUBLISHER changes must stop.
+Risk: HIGH.
 
-## AREA: SOCIAL_NEWS_COLLECTOR
+Stop: unattended tasks requiring this area must stop.
 
-Purpose: News source collection.
+### AREA: SOCIAL_NEWS_COLLECTOR
 
-Allowed changes:
+Purpose: news source collection and source evidence preservation.
+
+Allowed:
 
 - source collection bug fix
 - URL normalization before raw save
@@ -371,7 +270,7 @@ Allowed changes:
 - source metadata preservation
 - discovery source handling
 
-Forbidden changes:
+Forbidden:
 
 - content publishing
 - Facebook publisher
@@ -379,13 +278,13 @@ Forbidden changes:
 - admin auth
 - content selection beyond source handoff
 
-Risk level: MEDIUM
+Risk: MEDIUM.
 
-## AREA: SOCIAL_NEWS_CANDIDATE
+### AREA: SOCIAL_NEWS_CANDIDATE
 
-Purpose: News candidate normalization, duplicate classification, scoring.
+Purpose: news candidate normalization, duplicate classification, quality scoring, and user-value classification.
 
-Allowed changes:
+Allowed:
 
 - duplicate type classification
 - quality gate
@@ -394,26 +293,26 @@ Allowed changes:
 - system-message contamination blocking
 - candidate status mapping
 
-Forbidden changes:
+Forbidden:
 
 - direct Facebook publishing
 - content publisher execution
 - scheduler
 - auth
 
-Risk level: MEDIUM
-
 Required checks:
 
 - broken body messages do not become content
-- political/economy low relevance items are skipped or lowered
-- Google RSS final links are blocked
+- politics/economy/travel/crypto low-relevance items are skipped or lowered
+- Google RSS/search links are blocked as final links
 
-## AREA: CONTENT_QUEUE
+Risk: MEDIUM.
 
-Purpose: Content candidate management and listing.
+### AREA: CONTENT_QUEUE
 
-Allowed changes:
+Purpose: content candidate management, listing, source reference mapping, and manual review state.
+
+Allowed:
 
 - content candidate sync validation
 - status display
@@ -422,7 +321,7 @@ Allowed changes:
 - admin list columns
 - manual review state
 
-Forbidden changes:
+Forbidden:
 
 - automatic publisher execution
 - Facebook publisher payload
@@ -430,13 +329,11 @@ Forbidden changes:
 - auth
 - destructive content deletion
 
-Risk level: MEDIUM
+Risk: MEDIUM.
 
-## AREA: CONTENT_PUBLISHER
+### AREA: CONTENT_PUBLISHER
 
-Purpose: Automatic or manual content publishing.
-
-Allowed changes: only with explicit user approval unless task is read-only audit.
+Purpose: automatic or manual content publishing behavior.
 
 Includes:
 
@@ -447,15 +344,17 @@ Includes:
 - publish retry
 - final message generation
 
-Risk level: HIGH
+Allowed: only with explicit user approval unless task is read-only audit.
 
-Stop condition: unattended harness must not change CONTENT_PUBLISHER behavior.
+Risk: HIGH.
 
-## AREA: OCCUPATION_DICTIONARY
+Stop: unattended harness must not change `CONTENT_PUBLISHER` behavior.
+
+### AREA: OCCUPATION_DICTIONARY
 
 Purpose: Employment24 occupation/job dictionary collection and display.
 
-Allowed changes:
+Allowed:
 
 - read-only UI improvements
 - pagination
@@ -463,20 +362,20 @@ Allowed changes:
 - enrichment draft fields
 - collect log display
 
-Forbidden changes:
+Forbidden:
 
-- treating occupation as job posting
+- treating occupation dictionary as job posting
 - auto publishing occupation guides without enrichment
 - visa eligibility guarantees
 - destructive data rewrite
 
-Risk level: LOW-MEDIUM
+Risk: LOW-MEDIUM.
 
-## AREA: IMMIGRATION_DOMAIN
+### AREA: IMMIGRATION_DOMAIN
 
-Purpose: Immigration/visa official information.
+Purpose: immigration and visa official information.
 
-Allowed changes:
+Allowed:
 
 - source inventory
 - official notice display
@@ -484,92 +383,202 @@ Allowed changes:
 - review-required status
 - source metadata
 
-Forbidden changes:
+Forbidden:
 
 - legal certainty generation
 - auto publishing official notices without review
 - destructive migration
 
-Risk level: MEDIUM-HIGH
+Risk: MEDIUM-HIGH.
 
-## AREA: LIVING_DOMAIN
+### AREA: LIVING_DOMAIN
 
-Purpose: Living/settlement information.
+Purpose: living and settlement information.
 
-Allowed changes:
+Allowed:
 
 - category definitions
 - source mapping
 - guide candidate rules
 - admin display
 
-Forbidden changes:
+Forbidden:
 
 - publishing unsourced lifestyle content
 - treating generic travel content as settlement guide
 
-Risk level: MEDIUM
+Risk: MEDIUM.
 
-## AREA: LLAMA_STATUS
+### AREA: CONTENT_CARD_GENERATION
+
+Purpose: preview and generation rules for content card assets.
+
+Allowed:
+
+- card template config
+- card text validation
+- generated image output path
+- source/date/link display
+- language validation
+- preview-only generation
+
+Forbidden:
+
+- publishing cards automatically
+- changing Facebook publisher payload
+- bypassing content candidate approval
+- generating public cards directly from raw source
+- using internal diagnostic/status text on public cards
+
+Required checks:
+
+- generated card has source/date/link where applicable
+- public card text has no diagnostic/status contamination
+- generation is preview-only unless a protected publishing task is approved
+
+Risk: LOW-MEDIUM.
+
+### AREA: LLAMA_STATUS
 
 Purpose: Local LLM/Ollama status and optional helper use.
 
-Allowed changes:
+Allowed:
 
 - status display
 - fallback status
 - timeout display
-- manual off display
+- manual-off display
 
-Forbidden changes:
+Forbidden:
 
 - killing server process
 - starting/stopping Ollama without explicit task
 - making Local LLM required
 - publishing directly from LLM output
 
-Risk level: MEDIUM
+Risk: MEDIUM.
 
-## AREA: SCHEDULER_BOT_STATE
+### AREA: SCHEDULER_BOT_STATE
 
-Purpose: Schedulers, bot ON/OFF, cooldown, recurring jobs.
+Purpose: schedulers, bot on/off, cooldown, recurring jobs.
 
-Allowed changes: only with explicit user approval unless read-only audit.
+Allowed: only with explicit user approval unless read-only audit.
 
 Forbidden in unattended harness:
 
-- changing intervals
-- changing cooldown
-- changing bot ON/OFF transition
+- interval changes
+- cooldown changes
+- bot on/off transition changes
 - starting new loops
 - disabling bots after retryable failure
-- overlapping same job without lock
+- overlapping same job without explicit locking
 
-Risk level: HIGH
+Risk: HIGH.
 
-## AREA: TELEGRAM_REPORTING
+### AREA: TELEGRAM_REPORTING
 
-Purpose: Operation summaries and harness reports sent to Telegram.
+Purpose: operation summaries, review messages, and harness reports sent to Telegram.
 
-Allowed changes:
+Allowed:
 
-- 6-hour compressed summary format
+- compressed summary format
 - publish failure summary
 - stop report notification
 - operational status notification
 
-Forbidden changes:
+Forbidden:
 
-- approval/reject publishing flow
+- approval/reject publishing flow changes
 - leaking secrets
 - sending full stack traces
 - sending raw tokens
 - spammy high-frequency reporting
 
-Risk level: LOW-MEDIUM
+Risk: LOW-MEDIUM.
 
-Recommended report frequency:
+Execution card: Operation Notification Recurrence Suppression
 
-- checkpoint: local/walkthrough
-- telegram compressed summary: every 6 hours
-- urgent stop report: immediately
+Use when the same candidate, review identity, status, or failure repeatedly enters Telegram reporting/review.
+
+Action:
+
+- suppress or downgrade repeated operation notifications when stable duplicate identity is available
+- log suppression reason
+- preserve the first occurrence and latest meaningful state change
+
+Do not touch:
+
+- Facebook publisher
+- content publisher
+- scheduler frequency
+- auth/device approval
+- external API behavior
+
+Verify:
+
+- repeated notification is suppressed or clearly classified
+- meaningful state changes still notify
+
+This is an architecture/work-area rule only. Do not implement runtime behavior from this card without an approved task.
+
+## Future Audit Targets
+
+### CODE_TASK_CANDIDATE
+
+```text
+AREA: CONTENT_QUEUE
+MODE: READ_ONLY_AUDIT
+PURPOSE FUNCTION:
+Verify whether content.content_candidate is acting as the final publishable content object or merely duplicating social_news.candidate.
+TIMEBOX: 60m
+```
+
+Risk: MEDIUM.
+
+Protected area: NO for read-only audit; YES if audit recommends publisher changes.
+
+### CODE_TASK_CANDIDATE
+
+```text
+AREA: SYSTEM_ARCHITECTURE_DOCS + CONTENT_QUEUE
+MODE: READ_ONLY_AUDIT
+PURPOSE FUNCTION:
+Clarify Python vs Java workflow ownership for collection, content approval, Telegram review, migrations, and publish boundaries before implementation work.
+TIMEBOX: 60m
+```
+
+Risk: MEDIUM.
+
+Protected area: NO for read-only audit; YES if implementation requires scheduler, publisher, auth, DB migration, or external API changes.
+
+## Required Checks
+
+Choose checks based on AREA and MODE:
+
+- architecture/doc consistency
+- no forbidden files touched
+- backend health
+- frontend build/load
+- target API response
+- UI visual inspection
+- read-only DB diagnostics
+- unit/smoke tests
+- no raw token/secret leakage
+- no protected area touched
+- public content contamination check
+
+## Stop Conditions
+
+Stop and report when:
+
+- task requires protected-area changes without approval
+- task requires unrelated module changes
+- architecture documents conflict
+- ownership is ambiguous and implementation would decide it silently
+- backend/frontend verification cannot be performed when required
+- runtime error points outside the current area
+- fix requires guessing
+- auth, Facebook publisher, content publisher, scheduler, bot state, destructive migration, env/secrets, or external API behavior would be affected without approval
+- task scope expands beyond declared AREA
+
+A stopped task with a clear report is preferred over a completed task that weakens WorkConnect boundaries.
