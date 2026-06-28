@@ -258,8 +258,9 @@ class ContentGateDecision:
 
 
 class ContentService:
-    def __init__(self, repository: ContentRepository | None = None) -> None:
+    def __init__(self, repository: ContentRepository | None = None, living_info_service: Any | None = None) -> None:
         self.repository = repository or ContentRepository()
+        self.living_info_service = living_info_service
 
     def sync_all(self, limit: int = 200) -> dict[str, Any]:
         news = self.sync_social_news(limit=limit)
@@ -269,6 +270,31 @@ class ContentService:
             "social_news": news,
             "immigration": immigration,
             "synced_total": news["synced_count"] + immigration["synced_count"],
+        }
+
+    def sync_living_info(self, limit: int = 100) -> dict[str, Any]:
+        living_info_service = self._living_info_service()
+        clusters = living_info_service.list_ready_topic_clusters(limit=max(1, min(int(limit), 500)))
+        synced = 0
+        skipped = 0
+        skipped_reasons: dict[str, int] = {}
+        for cluster in clusters:
+            evidence = living_info_service.topic_cluster_evidence(int(cluster.get("id") or 0))
+            payload = living_info_service.topic_cluster_to_content_candidate_payload(cluster, evidence)
+            if not payload.get("ready"):
+                skipped += 1
+                reason = str(payload.get("skip_reason") or "unknown")
+                skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
+                continue
+            content_payload = {key: value for key, value in payload.items() if key != "ready"}
+            self.repository.upsert_candidate(content_payload)
+            synced += 1
+        return {
+            "source": "living_info.topic_cluster",
+            "seen_count": len(clusters),
+            "synced_count": synced,
+            "skipped_count": skipped,
+            "skipped_reasons": skipped_reasons,
         }
 
     def sync_social_news(self, limit: int = 200) -> dict[str, Any]:
@@ -298,14 +324,45 @@ class ContentService:
                 )
                 rows = cur.fetchall()
 
-        synced = 0
+        return self._sync_social_news_rows(rows)
+
+    def _living_info_service(self) -> Any:
+        if self.living_info_service is None:
+            from ..living_info.service import LivingInfoService
+
+            self.living_info_service = LivingInfoService()
+        return self.living_info_service
+
+    def _sync_social_news_rows(self, rows: list[tuple[Any, ...]]) -> dict[str, Any]:
+        content_candidate_synced = 0
+        living_info_ingested = 0
+        living_info_skipped = 0
+        skipped_no_title = 0
         for row in rows:
             payload = social_news_payload(row)
-            if payload["title"]:
-                self.repository.upsert_candidate(payload)
-                synced += 1
+            if not payload["title"]:
+                skipped_no_title += 1
+                continue
+            if payload.get("source_domain") == "LIVING_INFO":
+                result = self._living_info_service().ingest_from_social_news_candidate(payload)
+                if result.get("ok"):
+                    living_info_ingested += 1
+                else:
+                    living_info_skipped += 1
+                continue
+            self.repository.upsert_candidate(payload)
+            content_candidate_synced += 1
         archived = self.repository.archive_non_representative_social_news()
-        return {"source": "social_news.candidate", "seen_count": len(rows), "synced_count": synced, "archived_duplicate_count": archived}
+        return {
+            "source": "social_news.candidate",
+            "seen_count": len(rows),
+            "synced_count": content_candidate_synced + living_info_ingested,
+            "content_candidate_synced_count": content_candidate_synced,
+            "living_info_ingested_count": living_info_ingested,
+            "living_info_skipped_count": living_info_skipped,
+            "skipped_no_title_count": skipped_no_title,
+            "archived_duplicate_count": archived,
+        }
 
     def sync_immigration(self, limit: int = 200) -> dict[str, Any]:
         from ..storage.db.postgres import connect

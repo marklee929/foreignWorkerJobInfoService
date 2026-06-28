@@ -346,6 +346,15 @@ Required behavior:
 - create or update a correction-loop entry when a recurring miss, harness violation, chat-only report, or closeout failure occurred
 - end with the exact completion marker in the execute prompt, not only in chat
 
+Queue-drain override:
+
+- default behavior is one queued task per user turn
+- if the user explicitly says to continue until the whole queue/task set is complete, Codex may execute queued tasks sequentially in the same turn
+- queue-drain mode does not override task-level `Stop after report` when the next task requires explicit approval, protected areas, destructive DB work, scheduler/publisher/auth/env changes, or unresolved ownership decisions
+- after each completed queued task, Codex must save a report and update the execute prompt before proceeding
+- if Codex stops on a protected/precondition gate, the marker must remain immediately before the blocked pending task, and the stop reason must be recorded in the report
+- queue-drain mode must not mark later pending tasks as complete unless they were actually executed and verified
+
 ### TRIGGER CARD: INDIVIDUAL_REQUEST_DEFAULT_REVIEW
 
 Condition:
@@ -430,7 +439,8 @@ Required closeout:
 - verify exact WorkConnect completion marker count is 1 in the execute prompt
 - verify legacy decorated completion marker count is 0 in the execute prompt
 - verify loose completion marker count is 0 in the execute prompt
-- verify the final line is the exact WorkConnect completion marker when the execute prompt format requires it
+- if the execute prompt has remaining pending queue, verify the marker is the boundary immediately before that pending queue
+- if the execute prompt has no remaining pending queue, verify the final line is the exact WorkConnect completion marker
 - if loose marker count is not 0, repair the execute prompt marker state or record a harness closeout failure
 - add a correction-loop entry if any recurring failure or harness miss happened
 - state protected areas touched or not touched
@@ -490,8 +500,11 @@ Rules:
 - do not place the exact marker inside examples, comments, archived sections, or code blocks
 - use `[COMPLETION_MARKER_EXAMPLE_DO_NOT_COPY]` for examples
 - migrate the legacy decorated Korean marker to the WorkConnect marker
-- if both legacy and WorkConnect markers exist, preserve only one WorkConnect marker at the final boundary and archive or rename the legacy marker so it cannot be matched
-- verification must include WorkConnect marker count 1, legacy marker count 0, loose marker count 0, and final line is the WorkConnect marker
+- if both legacy and WorkConnect markers exist, preserve only one WorkConnect marker at the execution boundary and archive or rename the legacy marker so it cannot be matched
+- verification must include WorkConnect marker count 1, legacy marker count 0, loose marker count 0, and boundary placement
+- final-line verification applies only when no pending queue remains
+- if pending tasks remain below the completed task, the marker must stay between the last completed task/result and the first pending task
+- do not move the marker to the end of the whole queue after completing only one task; that falsely marks pending tasks as completed
 
 ### First-Run Execute Prompt Fallback
 
@@ -511,7 +524,7 @@ Required behavior:
 - treat the whole file as the first pending task
 - do not require the user to add an initial marker before the first run
 - after task completion, append the execution result to the same execute prompt
-- add the exact WorkConnect completion marker as the final line
+- add the exact WorkConnect completion marker after the first completed task/result; use final line only if no pending queue remains
 - save the report to `DOC/walkthrough/execution-history/YYYY-MM-DD/`
 
 Stop if:
@@ -549,11 +562,14 @@ remaining pending queue
 
 If there is no remaining queue, the completion marker must be the final line of the file.
 
+If remaining queue exists, the completion marker must not be the final line. It must be placed immediately after the last completed task/result and immediately before the first pending task.
+
 Rules:
 
 - remove the old completion marker from its previous location
 - keep the executed phase prompts and result summaries in the completed history area
 - append the completion marker at the boundary between completed history and remaining pending queue
+- leave all remaining pending tasks below the marker so the next short command can identify the next task
 - do not move the marker during a `DOC_ONLY` harness-rule update unless that task explicitly asks to update the execute prompt file
 
 ### Execution History Rule
