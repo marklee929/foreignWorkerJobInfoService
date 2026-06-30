@@ -158,6 +158,10 @@ export function syncContentCandidates(payload = {}) {
   return postJson('/api/admin/content/sync', payload)
 }
 
+export function syncLivingInfoContentCandidates(payload = {}) {
+  return postJson('/api/admin/content/living-info/sync', payload)
+}
+
 export function publishContentCandidate(id, payload = {}) {
   return postJson(`/api/admin/content/candidates/${id}/publish`, payload)
 }

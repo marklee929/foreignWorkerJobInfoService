@@ -7,7 +7,7 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
-from .models import LivingNormalizedItem, LivingSourceItem
+from .models import LivingNormalizedItem, LivingSourceItem, LivingTopicCluster
 from .repository import LivingInfoRepository
 
 
@@ -47,6 +47,53 @@ class LivingInfoService:
 
     def topic_cluster_to_content_candidate_payload(self, cluster: dict[str, Any], evidence: list[dict[str, Any]]) -> dict[str, Any]:
         return topic_cluster_to_content_candidate_payload(cluster, evidence)
+
+    def prepare_topic_clusters(self, limit: int = 100, dry_run: bool = True) -> dict[str, Any]:
+        items = self.repository.list_normalized_items_for_clustering(limit=max(1, min(int(limit or 100), 500)))
+        clusters = build_topic_clusters(items)
+        written_count = 0
+        cluster_results: list[dict[str, Any]] = []
+        for cluster_plan in clusters:
+            cluster_payload = cluster_plan["cluster"]
+            item_links = cluster_plan["items"]
+            topic_cluster_id = 0
+            if not dry_run:
+                topic_cluster_id = self.repository.upsert_topic_cluster(cluster_payload)
+                for link in item_links:
+                    self.repository.upsert_topic_cluster_item_normalized(
+                        topic_cluster_id=topic_cluster_id,
+                        normalized_item_id=int(link["normalized_item_id"]),
+                        item_role=str(link["item_role"]),
+                        weight_score=float(link["weight_score"]),
+                    )
+                written_count += 1
+            cluster_results.append(
+                {
+                    "topic_cluster_id": topic_cluster_id,
+                    "topic_key": cluster_payload.topic_key,
+                    "primary_category": cluster_payload.primary_category,
+                    "target_user": cluster_payload.target_user,
+                    "action_type": cluster_payload.action_type,
+                    "source_count": cluster_payload.source_count,
+                    "evidence_count": cluster_payload.evidence_count,
+                    "official_source_count": cluster_payload.official_source_count,
+                    "secondary_source_count": cluster_payload.secondary_source_count,
+                    "source_spread_count": cluster_payload.source_spread_count,
+                    "readiness_score": cluster_payload.readiness_score,
+                    "public_candidate_ready_yn": cluster_payload.public_candidate_ready_yn,
+                    "validation_status": cluster_payload.validation_status,
+                    "cluster_status": cluster_payload.cluster_status,
+                    "item_count": len(item_links),
+                }
+            )
+        return {
+            "source": "living_info.normalized_item",
+            "dry_run": bool(dry_run),
+            "seen_count": len(items),
+            "cluster_count": len(clusters),
+            "written_count": written_count,
+            "clusters": cluster_results,
+        }
 
 
 def social_news_payload_to_source_item(payload: dict[str, Any], source_url: str | None = None) -> LivingSourceItem:
@@ -160,6 +207,172 @@ def topic_cluster_to_content_candidate_payload(cluster: dict[str, Any], evidence
             "evidence_count": len(evidence),
         },
     }
+
+
+def build_topic_clusters(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
+    for item in items:
+        if not valid_url(str(item.get("source_url") or item.get("publishable_link_url") or "")):
+            continue
+        topic_key_value = str(item.get("topic_key_candidate") or "").strip()
+        primary = str(item.get("normalized_primary_category") or "DAILY_LIFE").strip().upper()
+        target_user = str(item.get("target_user") or "FOREIGN_RESIDENTS_IN_KOREA").strip()
+        action = str(item.get("action_type") or action_type(primary)).strip()
+        if not topic_key_value:
+            continue
+        grouped.setdefault((topic_key_value, primary, target_user, action), []).append(item)
+
+    plans: list[dict[str, Any]] = []
+    for (topic_key_value, primary, target_user, action), group_items in grouped.items():
+        representative = representative_cluster_item(group_items)
+        item_links = []
+        for item in group_items:
+            item_links.append(
+                {
+                    "normalized_item_id": int(item.get("normalized_item_id") or 0),
+                    "item_role": "REPRESENTATIVE" if item is representative else "EVIDENCE",
+                    "weight_score": cluster_item_weight(item),
+                }
+            )
+
+        source_item_ids = {int(item.get("source_item_id") or 0) for item in group_items if int(item.get("source_item_id") or 0)}
+        source_spread = {source_spread_key(item) for item in group_items if source_spread_key(item)}
+        official_count = sum(1 for item in group_items if source_trust_rank(str(item.get("source_trust_level") or "")) <= 1)
+        secondary_count = sum(1 for item in group_items if source_trust_rank(str(item.get("source_trust_level") or "")) in {2, 3})
+        readiness = topic_cluster_readiness_score(group_items)
+        validation_status = topic_cluster_validation_status(
+            official_source_count=official_count,
+            secondary_source_count=secondary_count,
+            evidence_count=len(group_items),
+        )
+        public_ready = (
+            readiness >= 60
+            and len(group_items) >= 1
+            and validation_status in {"VALIDATED", "READY"}
+        )
+        cluster = LivingTopicCluster(
+            topic_key=topic_key_value,
+            primary_category=primary,
+            secondary_category=str(representative.get("normalized_secondary_category") or ""),
+            target_user=target_user,
+            action_type=action,
+            source_count=len(source_item_ids),
+            evidence_count=len(group_items),
+            community_signal_count=0,
+            official_source_count=official_count,
+            secondary_source_count=secondary_count,
+            source_spread_count=len(source_spread),
+            readiness_score=readiness,
+            public_candidate_ready_yn="Y" if public_ready else "N",
+            validation_status=validation_status,
+            cluster_status="READY" if public_ready else "OPEN",
+            last_signal_at="",
+            last_evidence_at=last_evidence_at(group_items),
+        )
+        plans.append({"cluster": cluster, "items": item_links})
+
+    return sorted(
+        plans,
+        key=lambda plan: (
+            -float(plan["cluster"].readiness_score),
+            str(plan["cluster"].primary_category),
+            str(plan["cluster"].topic_key),
+        ),
+    )
+
+
+def representative_cluster_item(items: list[dict[str, Any]]) -> dict[str, Any]:
+    if not items:
+        return {}
+    return sorted(
+        items,
+        key=lambda item: (
+            source_trust_rank(str(item.get("source_trust_level") or "")),
+            -cluster_item_weight(item),
+            str(item.get("collected_at") or ""),
+        ),
+    )[0]
+
+
+def cluster_item_weight(item: dict[str, Any]) -> float:
+    score = average_score(
+        [
+            to_float(item.get("actionability_score")),
+            to_float(item.get("repeatability_score")),
+            to_float(item.get("source_reliability_score")),
+            to_float(item.get("normalization_confidence")),
+        ]
+    )
+    return round(min(1.0, max(0.1, score / 100.0)), 4)
+
+
+def topic_cluster_readiness_score(items: list[dict[str, Any]]) -> float:
+    if not items:
+        return 0.0
+    base = average_score(
+        [
+            average_score(
+                [
+                    to_float(item.get("actionability_score")),
+                    to_float(item.get("repeatability_score")),
+                    to_float(item.get("source_reliability_score")),
+                    to_float(item.get("normalization_confidence")),
+                ]
+            )
+            for item in items
+        ]
+    )
+    has_official = any(source_trust_rank(str(item.get("source_trust_level") or "")) <= 1 for item in items)
+    spread_count = len({source_spread_key(item) for item in items if source_spread_key(item)})
+    bonus = (10 if has_official else 0) + (5 if spread_count >= 2 else 0)
+    return round(min(100.0, max(0.0, base + bonus)), 4)
+
+
+def topic_cluster_validation_status(
+    *,
+    official_source_count: int,
+    secondary_source_count: int,
+    evidence_count: int,
+) -> str:
+    if official_source_count > 0 and evidence_count > 0:
+        return "VALIDATED"
+    if secondary_source_count > 0 and evidence_count >= 2:
+        return "READY"
+    return "PENDING"
+
+
+def source_trust_rank(value: str) -> int:
+    return {
+        "PRIMARY": 0,
+        "OFFICIAL": 1,
+        "TRUSTED_MEDIA": 2,
+        "SECONDARY": 3,
+        "DISCOVERY": 4,
+    }.get(value.upper(), 9)
+
+
+def source_spread_key(item: dict[str, Any]) -> str:
+    for key in ("canonical_url", "publishable_link_url", "source_url"):
+        value = str(item.get(key) or "").strip()
+        if valid_url(value):
+            return urlsplit(value).netloc.lower()
+    return compact_text(str(item.get("source_name") or "")).lower()
+
+
+def last_evidence_at(items: list[dict[str, Any]]) -> str:
+    values = [
+        str(item.get("published_at") or item.get("collected_at") or "").strip()
+        for item in items
+        if str(item.get("published_at") or item.get("collected_at") or "").strip()
+    ]
+    return max(values) if values else ""
+
+
+def average_score(values: list[float]) -> float:
+    numeric = [float(value) for value in values if float(value or 0) > 0]
+    if not numeric:
+        return 0.0
+    return sum(numeric) / len(numeric)
 
 
 def topic_cluster_review_ready(cluster: dict[str, Any], evidence: list[dict[str, Any]]) -> tuple[bool, str]:

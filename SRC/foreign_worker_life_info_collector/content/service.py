@@ -297,6 +297,12 @@ class ContentService:
             "skipped_reasons": skipped_reasons,
         }
 
+    def prepare_living_info_topic_clusters(self, limit: int = 100, dry_run: bool = True) -> dict[str, Any]:
+        return self._living_info_service().prepare_topic_clusters(
+            limit=max(1, min(int(limit or 100), 500)),
+            dry_run=bool(dry_run),
+        )
+
     def sync_social_news(self, limit: int = 200) -> dict[str, Any]:
         from ..storage.db.postgres import connect
 
@@ -455,6 +461,12 @@ class ContentService:
             "content_candidate_id": candidate_id,
             "facebook_debugger_url": sharing_debugger_url(link_url),
         }
+        real_publish_enabled = (
+            os.getenv("CONTENT_FACEBOOK_PUBLISH_ENABLED", "").strip().lower() == "true"
+            and os.getenv("CONTENT_AUTO_PUBLISH", "").strip().lower() == "true"
+        )
+        test_mode = os.getenv("CONTENT_PUBLISH_TEST_MODE", "true").strip().lower() != "false"
+        protected_dry_run = bool(dry_run or not real_publish_enabled or test_mode)
         link_valid, link_reject_reason = validate_facebook_article_link(link_url)
         message_reject_reason = facebook_message_reject_reason(message)
         if message_reject_reason or not link_valid:
@@ -475,15 +487,9 @@ class ContentService:
                 "error_code": error_code,
                 "error_message": error_message,
             }
-            update = self.repository.update_publish_result(candidate_id, result, dry_run=False)
+            update = self.repository.update_publish_result(candidate_id, result, dry_run=protected_dry_run)
             return {**result, "facebook_status": result.get("status", ""), **update}
-        real_publish_enabled = (
-            os.getenv("CONTENT_FACEBOOK_PUBLISH_ENABLED", "").strip().lower() == "true"
-            and os.getenv("CONTENT_AUTO_PUBLISH", "").strip().lower() == "true"
-        )
-        test_mode = os.getenv("CONTENT_PUBLISH_TEST_MODE", "true").strip().lower() != "false"
-        dry_run = bool(dry_run or not real_publish_enabled or test_mode)
-        if dry_run:
+        if protected_dry_run:
             result = {
                 "ok": True,
                 "status": "DRY_RUN",

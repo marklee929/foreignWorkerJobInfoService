@@ -1,4 +1,4 @@
-!wc-audit
+﻿!wc-audit
 
 PURPOSE FUNCTION:
 WorkConnect helps foreign workers, residents, students, migrants, and movers reduce uncertainty through practical, source-backed work-and-settlement information.
@@ -15,7 +15,7 @@ Design the first real `living_info` database schema and migration/backfill strat
 Current finding:
 `living_info` physical tables do not appear to exist yet. Current LIVING_INFO behavior is represented mainly through `content.content_candidate.source_domain = 'LIVING_INFO'` and data copied from `social_news.candidate`.
 
-The goal is to move from “living info as content label” to “living info as a real source/domain data layer.”
+The goal is to move from ?쐋iving info as content label??to ?쐋iving info as a real source/domain data layer.??
 
 This is READ_ONLY design work.
 Do not modify DB.
@@ -1384,7 +1384,7 @@ This is walkthrough-driven Codex work.
 At completion:
 
 * Save final report under `DOC/walkthrough/execution-history/YYYY-MM-DD/`
-* Update today’s `DOC/walkthrough/YYYY-MM-DD - execute prompt.md`
+* Update today?셲 `DOC/walkthrough/YYYY-MM-DD - execute prompt.md`
 * If a harness miss or recurring issue is found, update `DOC/correction-loop/`
 * Verify exact `[COMPLETION_MARKER_EXAMPLE_DO_NOT_COPY]` count = 1
 * Verify old decorated Korean completion marker count = 0
@@ -1555,7 +1555,7 @@ Execute only one task per run.
 After each task:
 
 * save report under `DOC/walkthrough/execution-history/YYYY-MM-DD/`
-* update today’s execute prompt
+* update today?셲 execute prompt
 * verify WorkConnect completion marker state
 * stop and wait for user review
 * do not automatically continue to the next task
@@ -1728,7 +1728,7 @@ Apply the reviewed `living_info` migration to local PostgreSQL only after explic
 
 Precondition:
 User must explicitly say:
-`승인. living_info migration 실행해.`
+`?뱀씤. living_info migration ?ㅽ뻾??`
 
 Allowed:
 
@@ -2126,5 +2126,836 @@ Stop after report.
 - DB/migration changes: NO
 - actual external API call: NO
 - auto-publish enabled: NO
+
+@GitHub
+
+AREA: CONTENT_QUEUE + LIVING_DOMAIN
+MODE: READ_ONLY_AUDIT
+PURPOSE FUNCTION:
+Verify the current living-info preparation pipeline from living_info.topic_cluster to content.content_candidate before implementation.
+
+FOCUS:
+- Inspect current code paths for ContentService.sync_living_info().
+- Check whether sync_all() includes living_info.
+- Check whether any scheduler or command currently calls sync_living_info().
+- Check whether ready living_info.topic_cluster rows can become content.content_candidate READY_TO_REVIEW.
+- Identify missing links for a 20m/1h content-preparation pipeline.
+- Do not modify files.
+- Do not touch Facebook publisher, content publisher, scheduler, auth, env/secrets, or DB migration.
+
+REPORT:
+- Current connected path
+- Missing path
+- Risk areas
+- Exact CODE_TASK_CANDIDATE for guarded implementation
+
+@GitHub
+
+?ㅼ쓬 ?먮? ?⑥닚 ?뺤씤留??섏? 留먭퀬, ?꾨옒 `READ_ONLY_AUDIT`瑜??ㅼ젣濡??ㅽ뻾?댁쨾.
+
+以묒슂:
+
+* ?쒕떎???붿껌??臾댁뾿?몄? ?뺤씤?덈떎?앹뿉??硫덉텛吏 留?
+* ?뚯씪 ?섏젙? ?섏? 留먭퀬, GitHub 肄붾뱶? 臾몄꽌留??쎌뼱??媛먯궗 寃곌낵瑜??묒꽦??
+* 寃곌낵媛 ?좊ℓ?섎㈃ ?쒖떎??紐??ⓥ앹씠 ?꾨땲???대뼡 寃쎈줈媛 ?곌껐?먭퀬 ?대뵒媛 ?딄꼈?붿?源뚯? ?먮떒??
+* 援ы쁽 ?쒖븞? `CODE_TASK_CANDIDATE`濡쒕쭔 ?뺣━?섍퀬, ?ㅼ젣 援ы쁽? ?섏? 留?
+
+AREA: CONTENT_QUEUE + LIVING_DOMAIN
+
+MODE: READ_ONLY_AUDIT
+
+PURPOSE FUNCTION:
+Verify the current living-info preparation pipeline from `living_info.topic_cluster` to `content.content_candidate` before implementation.
+
+FOCUS:
+
+1. Inspect the current code path for `ContentService.sync_living_info()`.
+2. Check whether `sync_all()` includes `sync_living_info()`.
+3. Check whether any scheduler, command, API, or runtime entrypoint currently calls `sync_living_info()`.
+4. Check whether ready `living_info.topic_cluster` rows can become `content.content_candidate` rows with `READY_TO_REVIEW`.
+5. Identify the missing links needed for a 20m/1h content-preparation pipeline.
+6. Compare this with the existing article/news collection and content preparation pattern.
+7. Confirm whether the current state is:
+
+   * fully connected
+   * manually callable only
+   * partially connected
+   * disconnected
+   * blocked by protected areas
+
+FORBIDDEN:
+
+* Do not modify files.
+* Do not commit or push.
+* Do not run DB migrations.
+* Do not change scheduler behavior.
+* Do not change Facebook publisher.
+* Do not change content publisher.
+* Do not change Telegram runtime/callback.
+* Do not change auth, env, secrets, or external API behavior.
+* Do not send real Telegram/Facebook output.
+
+REPORT FORMAT:
+
+## 1. 寃곕줎
+
+* ?꾩옱 ?앺솢?뺣낫 ?뚯씠?꾨씪???곹깭瑜???臾몃떒?쇰줈 ?먮떒.
+
+## 2. Current connected path
+
+* ?ㅼ젣 ?곌껐??肄붾뱶 ?먮쫫???④퀎蹂꾨줈 ?뺣━.
+* 愿???뚯씪怨??⑥닔紐낆쓣 紐낆떆.
+
+## 3. Missing path
+
+* ?먮룞 ?뚯씠?꾨씪?몄쑝濡?蹂닿린 ?대젮???딄릿 吏?먯쓣 紐낇솗???뺣━.
+* ?뱁엳 `sync_all()`, scheduler, command/API entrypoint ?щ?瑜?遺꾨━?댁꽌 ?먮떒.
+
+## 4. Ready-to-review 媛???щ?
+
+* `living_info.topic_cluster`媛 ?대뼡 議곌굔?먯꽌 `content.content_candidate READY_TO_REVIEW`濡?媛????덈뒗吏 ?ㅻ챸.
+* ?대? ?뚯뒪?멸? ?덉쑝硫??뚯뒪???뚯씪???멸툒.
+
+## 5. Risk areas
+
+* 援ы쁽 ??蹂댄샇?곸뿭???우쓣 媛?μ꽦???덈뒗 遺遺꾩쓣 紐낆떆.
+* scheduler/content publisher/Facebook publisher??蹂꾨룄 ?쒖떆.
+
+## 6. CODE_TASK_CANDIDATE
+
+?ㅼ쓬 援ы쁽 ?묒뾽??理쒖냼 2?④퀎濡??섎닠???쒖븞:
+
+* 1?④퀎: scheduler ?놁씠 ?섎룞/紐낆떆 ?몄텧 媛?ν븳 content preparation ?곌껐
+* 2?④퀎: ?뱀씤 ??20m/1h scheduler ?곌껐
+
+媛??꾨낫???꾨옒 ?뺤떇?쇰줈 ?묒꽦:
+
+```text
+AREA:
+MODE:
+PURPOSE FUNCTION:
+FOCUS:
+ALLOWED CHANGES:
+FORBIDDEN CHANGES:
+VERIFICATION:
+STOP CONDITIONS:
+```
+
+## 7. 理쒖쥌 ?먯젙
+
+?꾨옒 以??섎굹濡??앸궡:
+
+* `READ_ONLY_AUDIT_COMPLETE_CONNECTED`
+* `READ_ONLY_AUDIT_COMPLETE_PARTIAL`
+* `READ_ONLY_AUDIT_COMPLETE_DISCONNECTED`
+* `STOP_REQUIRES_USER_REVIEW`
+
+### Execution Result - 2026-06-28 - Living Info Preparation Pipeline Audit
+
+- Report:
+  - `DOC/walkthrough/execution-history/2026-06-28/living-info-preparation-pipeline-read-only-audit-report.md`
+- AREA: `CONTENT_QUEUE + LIVING_DOMAIN`
+- MODE: `READ_ONLY_AUDIT`
+- Result: `READ_ONLY_AUDIT_COMPLETE_PARTIAL`
+- Current connected path:
+  - `ContentService.sync_living_info()`
+  - `LivingInfoService.list_ready_topic_clusters(...)`
+  - `LivingInfoRepository.list_ready_topic_clusters(...)`
+  - `LivingInfoService.topic_cluster_evidence(...)`
+  - `LivingInfoRepository.topic_cluster_evidence(...)`
+  - `LivingInfoService.topic_cluster_to_content_candidate_payload(...)`
+  - `ContentRepository.upsert_candidate(...)`
+- Main finding:
+  - `sync_living_info()` can create `content.content_candidate READY_TO_REVIEW` from ready `living_info.topic_cluster` rows.
+  - `sync_all()` does not include `sync_living_info()`.
+  - `/api/admin/content/sync` calls only `sync_all()`.
+  - `run_content_generation_cycle()` calls only `sync_all()`.
+  - No scheduler, command, API, or Admin UI entrypoint currently calls `sync_living_info()` directly.
+- Recommended next implementation:
+  - first add manual/admin-only `sync_living_info()` trigger
+  - only later connect 20m/1h scheduler after explicit approval
+- Runtime/code changes: NO
+- DB/migration changes: NO
+- Scheduler changes: NO
+- Facebook/content publisher changes: NO
+- Telegram runtime/callback changes: NO
+- Auth/env/secrets changes: NO
+
+
+?대쾲 ?붿껌? 援ы쁽 ?붿껌???꾨땲???ㅼ젣 ?쎄린?꾩슜 媛먯궗 ?ㅽ뻾 ?붿껌?대떎. ?⑥닚???쒕떎???먭? ?덈떎?앷퀬留??듯븯吏 留먭퀬, 肄붾뱶 ?뺤씤 寃곌낵瑜?蹂닿퀬?댁쨾.
+@GitHub
+
+!wc-next
+
+QUEUE-DRAIN MODE:
+?대쾲 ?붿껌? ?⑥씪 ?뺤씤???꾨땲???꾩껜 phased execution?대떎.
+媛?ν븳 踰붿쐞 ?덉뿉??PHASE 1遺??PHASE 7源뚯? ?쒖감 ?ㅽ뻾?대씪.
+
+紐⑺몴:
+?앺솢?뺣낫 ?뚯씠?꾨씪?몄쓣 `living_info` ?곗씠??異뺤뿉??`content.content_candidate` 以鍮??꾨낫, Telegram 寃??猷⑦봽, Facebook publish 蹂댄샇 寃쎄퀎源뚯? ?꾩껜?곸쑝濡??곌껐?섍퀬 寃利앺븳??
+
+?듭떖 ?먯튃:
+
+* ?대? ?뚯씠?꾨씪?몄? ?앷퉴吏 E2E濡?寃利앺븳??
+* ?ㅼ젣 ?몃? 異쒕젰? 蹂댄샇?쒕떎.
+* Facebook ?ㅼ젣 寃뚯떆 湲덉?.
+* Telegram ?ㅼ젣 諛쒖넚? dry-run ?먮뒗 紐낆떆??mock/sandbox留??덉슜.
+* destructive DB migration 湲덉?.
+* env/secrets 蹂寃?湲덉?.
+* 蹂댄샇?곸뿭??嫄대뱶由щ뒗 PHASE??諛섎뱶???대떦 PHASE ?덉뿉???뱀씤 踰붿쐞? ?꾪뿕???ㅼ떆 蹂닿퀬?섍퀬 吏꾪뻾?쒕떎.
+* 媛?PHASE ?꾨즺 ??report瑜???ν븯怨??ㅼ쓬 PHASE濡?吏꾪뻾?쒕떎.
+* ?ㅽ뙣 ??洹??먮━?먯꽌 硫덉텛吏 留먭퀬, ?덉쟾?섍쾶 媛?ν븳 吏꾨떒/由ы룷?멸퉴吏 ?묒꽦?쒕떎.
+* ?? protected area?먯꽌 紐낆떆 ?뱀씤 踰붿쐞瑜??섎뒗 蹂寃쎌씠 ?꾩슂?섎㈃ stop report瑜??묒꽦?쒕떎.
+
+APPROVAL BOUNDARY:
+?꾨옒 PHASE?ㅼ? ?대쾲 ?붿껌 ?덉뿉??援ы쁽/寃利앹쓣 ?뱀씤?쒕떎.
+
+Approved:
+
+* PHASE 1: manual/admin-only living-info sync trigger
+* PHASE 2: manual trigger E2E dry-run verification
+* PHASE 3: topic_cluster ?앹꽦/媛깆떊 寃쎈줈 媛먯궗 諛??덉쟾???섎룞/紐낆떆 ?ㅽ뻾 寃쎈줈 ?ㅺ퀎 ?먮뒗 援ы쁽
+* PHASE 4: scheduler ?곌껐 ?ㅺ퀎 諛?gated implementation, ???ㅼ젣 scheduler ?먮룞 ?ㅽ뻾? 湲곕낯 OFF
+* PHASE 5: Telegram review loop ?곌껐 寃利? ???ㅼ젣 ?몃? Telegram 諛쒖넚 湲덉? ?먮뒗 dry-run only
+* PHASE 6: Facebook publish 蹂댄샇 寃쎄퀎 寃利?諛?dry-run publish path ?뺤씤, ???ㅼ젣 Facebook 寃뚯떆 湲덉?
+* PHASE 7: 理쒖쥌 ?듯빀 由ы룷???묒꽦
+
+Not approved:
+
+* real Facebook post
+* real Telegram message to production chat
+* secret/token/env 蹂寃?
+* destructive DB operation
+* automatic publishing enabled by default
+* scheduler enabled by default without explicit config gate
+* auth/device approval 蹂寃?
+
+READ FIRST:
+
+* `CODEX_BOOTSTRAP.md`
+* `DOC/architecture/00_PRODUCT_NORTH_STAR.md`
+* `DOC/architecture/01_SYSTEM_GROWTH_WORKFLOW.md`
+* `DOC/architecture/02_DATA_SOURCE_AND_QUALITY.md`
+* `DOC/architecture/03_SYSTEM_ARCHITECTURE.md`
+* `DOC/architecture/04_LOCAL_DEVELOPMENT_RUNTIME_GUIDE.md`
+* `DOC/architecture/05_CODEX_HARNESS_GUIDE.md`
+* `DOC/architecture/06_WORK_AREA_REGISTRY.md`
+* today KST `DOC/walkthrough/YYYY-MM-DD - execute prompt.md`
+* current content/living/admin/scheduler related code
+
+GLOBAL FORBIDDEN CHANGES:
+
+* do not post to Facebook
+* do not send real Telegram messages to production chat
+* do not modify tokens/secrets/env files
+* do not weaken auth
+* do not run destructive DB migration
+* do not remove existing data
+* do not bypass review gates
+* do not make public publishing automatic by default
+* do not treat community-only signal as factual public content
+* do not promote weak/invalid source content to public-ready content
+
+GLOBAL VERIFICATION:
+At minimum verify:
+
+* backend relevant tests or targeted tests
+* frontend build/check if UI changed and safe
+* no raw token/secret leakage
+* no Facebook real output
+* no Telegram real output unless dry-run/mock
+* content candidates remain `READY_TO_REVIEW` unless explicitly operator-approved
+* skipped items include reasons
+* reports saved under `DOC/walkthrough/execution-history/YYYY-MM-DD/`
+* today execute prompt marker count remains exactly 1 at final boundary
+
+---
+
+# PHASE 1 ??Manual Living Info Preparation Trigger
+
+AREA: CONTENT_QUEUE + LIVING_DOMAIN + ADMIN_UI
+
+MODE: GUARDED_FIX
+
+PURPOSE FUNCTION:
+Allow operators to manually prepare ready `living_info.topic_cluster` rows as `content.content_candidate READY_TO_REVIEW` candidates without scheduler, Telegram runtime, content publisher, or Facebook publisher changes.
+
+FOCUS:
+Implement an explicit manual/admin-only trigger:
+
+```text
+living_info.topic_cluster
+-> ContentService.sync_living_info()
+-> content.content_candidate READY_TO_REVIEW
+```
+
+Preferred endpoint:
+
+```text
+POST /api/admin/content/living-info/sync
+```
+
+Expected response:
+
+```json
+{
+  "ok": true,
+  "source": "living_info.topic_cluster",
+  "seen_count": 0,
+  "synced_count": 0,
+  "skipped_count": 0,
+  "skipped_reasons": {}
+}
+```
+
+ALLOWED CHANGES:
+
+* admin content API route/controller for explicit manual trigger
+* apiClient function
+* Admin UI button/status display
+* tests for endpoint/service call
+
+FORBIDDEN CHANGES:
+
+* scheduler changes
+* Facebook publisher changes
+* content publisher auto-selection changes
+* Telegram runtime/callback changes
+* auth/env/secrets changes
+* DB migration
+* auto publish
+* `sync_all()` behavior change in this phase
+
+VERIFICATION:
+
+* endpoint calls only `sync_living_info()`
+* `sync_all()` remains unchanged
+* ready cluster creates `READY_TO_REVIEW`
+* no Telegram/Facebook send occurs
+
+REPORT:
+Save `phase-01-living-info-manual-trigger-result.md`.
+
+---
+
+## Execution Result - 2026-06-28 - PHASE 1
+
+- Report:
+  - `DOC/walkthrough/execution-history/2026-06-28/phase-01-living-info-manual-trigger-result.md`
+- Result: COMPLETED
+- Endpoint added:
+  - `POST /api/admin/content/living-info/sync`
+- Frontend added:
+  - `syncLivingInfoContentCandidates(...)`
+  - `ContentManagementPage.vue` `Living info prepare` button
+- Verification:
+  - `python -m py_compile`: PASS
+  - `pytest test_living_info_manual_sync_endpoint_contract.py test_content_sync_living_info.py`: `4 passed`
+  - `npm run build`: PASS
+- Protected areas:
+  - scheduler: NO
+  - Facebook publisher: NO
+  - content publisher auto-selection: NO
+  - Telegram runtime/callback: NO
+  - auth/env/secrets: NO
+  - DB migration: NO
+  - `sync_all()` behavior change: NO
+
+
+# PHASE 2 ??Manual Trigger E2E Dry-Run Verification
+
+AREA: CONTENT_QUEUE + LIVING_DOMAIN
+
+MODE: GUARDED_FIX
+
+PURPOSE FUNCTION:
+Verify the manual living-info preparation trigger through an internal E2E dry-run path.
+
+FOCUS:
+Run or simulate the path:
+
+```text
+ready living_info.topic_cluster
+-> endpoint or service call
+-> content.content_candidate
+-> READY_TO_REVIEW
+```
+
+If real DB has no ready cluster, use the existing test/fake service path or create a non-persistent/sample-mode verification. Do not fabricate production success.
+
+ALLOWED CHANGES:
+
+* tests
+* dry-run/sample verification helper if needed
+* report files
+
+FORBIDDEN CHANGES:
+
+* DB migration
+* scheduler
+* publisher
+* real external output
+* env/secrets
+
+VERIFICATION:
+
+* seen/synced/skipped counts are returned
+* unready cluster is skipped with reason
+* community-only signal does not become public candidate
+* content candidate status is `READY_TO_REVIEW`
+* no `READY_TO_PUBLISH`, `POSTED`, `PUBLISHED` unless existing data already had that state and was not caused by this phase
+
+REPORT:
+Save `phase-02-living-info-manual-e2e-result.md`.
+
+---
+
+## Execution Result - 2026-06-28 - PHASE 2
+
+- Report:
+  - `DOC/walkthrough/execution-history/2026-06-28/phase-02-living-info-manual-e2e-result.md`
+- Result: COMPLETED
+- Verification mode:
+  - non-persistent sample-mode dry-run
+- Dry-run ready result:
+  - `seen_count=1`, `synced_count=1`, `skipped_count=0`
+- Dry-run community-only result:
+  - `seen_count=1`, `synced_count=0`, `skipped_count=1`
+  - `skipped_reasons={"missing_source_evidence": 1}`
+- Generated output:
+  - `SRC/foreign_worker_life_info_collector/storage/generated/living_info/manual_sync_dry_run.json`
+  - `SRC/foreign_worker_life_info_collector/storage/generated/living_info/manual_sync_dry_run_community_only.json`
+- Verification:
+  - `python -m py_compile`: PASS
+  - `pytest test_living_info_manual_sync_dry_run.py test_content_sync_living_info.py`: `4 passed`
+- Protected areas:
+  - DB write/migration: NO
+  - scheduler: NO
+  - Facebook/content publisher: NO
+  - Telegram runtime/callback: NO
+  - auth/env/secrets: NO
+
+# PHASE 3 ??Topic Cluster Creation / Update Path
+
+AREA: LIVING_DOMAIN + CONTENT_QUEUE
+
+MODE: GUARDED_FIX
+
+PURPOSE FUNCTION:
+Ensure living-info source evidence can become usable topic clusters before candidate preparation.
+
+FOCUS:
+Audit and, if safe, implement or expose a bounded manual path for:
+
+```text
+living_info.source_item
+-> living_info.normalized_item
+-> living_info.topic_cluster
+-> living_info.topic_cluster_item
+```
+
+First inspect whether a clusterer already exists.
+
+If clusterer exists:
+
+* connect it to a manual/admin-only preparation path or verify it is callable.
+
+If clusterer does not exist:
+
+* implement the smallest deterministic cluster builder that groups normalized living info by `topic_key_candidate`, category, target_user, and action_type.
+* It must calculate source_count, evidence_count, official_source_count, secondary_source_count, source_spread_count, readiness_score, validation_status, public_candidate_ready_yn.
+* It must insert/update `topic_cluster` and `topic_cluster_item`.
+* It must not use community-only signal as factual evidence.
+* It must not auto publish.
+
+ALLOWED CHANGES:
+
+* living_info service/repository cluster preparation methods
+* manual/admin-only endpoint if needed
+* tests
+* reports
+
+FORBIDDEN CHANGES:
+
+* destructive DB migration
+* scheduler
+* Facebook publisher
+* content publisher
+* Telegram runtime/callback
+* auth/env/secrets
+
+VERIFICATION:
+
+* normalized items create/update topic_cluster
+* topic_cluster_item links normalized_item evidence
+* community-only cluster remains not public-ready
+* ready criteria are explainable
+* subsequent `sync_living_info()` sees the ready cluster
+
+STOP CONDITIONS:
+
+* schema cannot support required linking without migration
+* ownership between Python/Java workflow becomes ambiguous
+* implementation would require destructive DB changes
+
+REPORT:
+Save `phase-03-living-info-topic-cluster-result.md`.
+
+---
+
+## PHASE 3 Execution Result
+
+- Status: COMPLETE
+- Report: `DOC/walkthrough/execution-history/2026-06-28/phase-03-living-info-topic-cluster-result.md`
+- Implemented:
+  - `LivingInfoRepository.list_normalized_items_for_clustering`
+  - `LivingInfoRepository.upsert_topic_cluster_item_normalized`
+  - `LivingInfoService.prepare_topic_clusters`
+  - `ContentService.prepare_living_info_topic_clusters`
+  - `POST /api/admin/content/living-info/prepare-clusters`
+- Safety:
+  - default dry-run
+  - `execute: true` required for topic_cluster writes
+  - community signal not used as factual evidence
+  - no scheduler/Facebook/Telegram runtime/auth/env changes
+- Verification:
+  - `python -m py_compile`: PASS
+  - `pytest test_living_info_service.py test_living_info_manual_sync_endpoint_contract.py test_content_sync_living_info.py`: `15 passed`
+
+# PHASE 4 ??Gated 20m/1h Preparation Scheduler
+
+AREA: LIVING_DOMAIN + CONTENT_QUEUE + SCHEDULER_BOT_STATE
+
+MODE: PROTECTED_CHANGE
+
+PURPOSE FUNCTION:
+Connect living-info preparation into a gated timed content-preparation pipeline without enabling real external publishing.
+
+FOCUS:
+Implement a disabled-by-default scheduler/loop path for:
+
+```text
+topic cluster preparation
+-> sync_living_info()
+-> content.content_candidate READY_TO_REVIEW
+```
+
+Preferred config gate:
+
+```text
+LIVING_INFO_CONTENT_PREP_ENABLED=false
+LIVING_INFO_CONTENT_PREP_INTERVAL_MINUTES=60
+LIVING_INFO_CONTENT_PREP_LIMIT=20
+```
+
+The scheduler must be OFF by default.
+It may be callable manually for dry-run/test.
+
+ALLOWED CHANGES:
+
+* scheduler/loop wiring behind explicit disabled-by-default config
+* operational logs
+* duplicate/suppression guard
+* tests
+
+FORBIDDEN CHANGES:
+
+* real Facebook publish
+* content auto publish
+* Telegram real send
+* auth/env/secrets
+* destructive DB migration
+* enabling scheduler by default
+
+VERIFICATION:
+
+* default config does not run automatically
+* manual dry-run cycle can execute internal preparation
+* candidates remain `READY_TO_REVIEW`
+* logs include seen/synced/skipped
+* no external output occurs
+
+STOP CONDITIONS:
+
+* scheduler cannot be safely disabled by default
+* change would alter existing bot/publisher behavior
+* external output risk cannot be isolated
+
+REPORT:
+Save `phase-04-living-info-gated-scheduler-result.md`.
+
+---
+
+## PHASE 4 Execution Result
+
+- Status: COMPLETE
+- Report: `DOC/walkthrough/execution-history/2026-06-28/phase-04-living-info-gated-scheduler-result.md`
+- Implemented:
+  - `LIVING_INFO_CONTENT_PREP_ENABLED=false` default gate
+  - `run_living_info_content_prep_cycle`
+  - `run_living_info_content_prep_scheduler`
+  - `start_living_info_content_prep_scheduler_if_enabled`
+  - `GET /api/admin/content/living-info/prep-status`
+  - `POST /api/admin/content/living-info/prep-cycle`
+- Safety:
+  - scheduler disabled by default
+  - manual cycle defaults to `dryRun=true`
+  - no real Telegram send
+  - no Facebook/content auto publish
+  - no auth/env/secrets changes
+- Verification:
+  - `python -m py_compile`: PASS
+  - `pytest test_living_info_content_prep_scheduler_contract.py test_living_info_service.py test_content_sync_living_info.py test_living_info_manual_sync_endpoint_contract.py`: `21 passed`
+
+# PHASE 5 ??Telegram Review Loop Verification
+
+AREA: TELEGRAM_REPORTING + CONTENT_QUEUE + LIVING_DOMAIN
+
+MODE: GUARDED_FIX
+
+PURPOSE FUNCTION:
+Verify prepared living-info candidates can enter the review/reporting path without real Telegram output unless dry-run/mock is used.
+
+FOCUS:
+Check or implement dry-run review flow for `LIVING_INFO` candidates:
+
+```text
+content.content_candidate READY_TO_REVIEW
+-> review target selection
+-> Telegram review message preview
+-> duplicate/suppression guard
+-> publish_log telegram_review dry-run record
+```
+
+ALLOWED CHANGES:
+
+* Telegram review formatting for living-info if needed
+* dry-run record/reporting behavior
+* duplicate/suppression tests
+* report files
+
+FORBIDDEN CHANGES:
+
+* Telegram callback approval/reject behavior
+* real Telegram production send
+* Facebook publisher
+* scheduler frequency
+* auth/env/secrets
+* auto publish
+
+VERIFICATION:
+
+* living-info candidate appears as review target
+* message is generated
+* dry-run log is recorded or test confirms it
+* duplicate review within suppression window is suppressed or clearly classified
+* no production Telegram message is sent
+
+STOP CONDITIONS:
+
+* verification requires real Telegram production send
+* callback/runtime behavior must change
+* secret/env change is required
+
+REPORT:
+Save `phase-05-living-info-telegram-review-result.md`.
+
+---
+
+## PHASE 5 Execution Result
+
+- Status: COMPLETE
+- Report: `DOC/walkthrough/execution-history/2026-06-28/phase-05-living-info-telegram-review-result.md`
+- Verified:
+  - `LIVING_INFO / LIVING_GUIDE / READY_TO_REVIEW` appears as review target
+  - Telegram review message dry-run path records log
+  - duplicate review is suppressed
+  - `telegram_api` and `telegram_api_multipart` are not called in tests
+- Modified:
+  - `SRC/foreign_worker_life_info_collector/tests/test_living_info_telegram_review_flow.py`
+- Safety:
+  - no Telegram callback change
+  - no real Telegram production send
+  - no Facebook publisher/content publisher change
+  - no scheduler/auth/env/secrets change
+- Verification:
+  - `python -m py_compile`: PASS
+  - `pytest test_living_info_telegram_review_flow.py test_content_review_dedupe.py test_living_info_content_prep_scheduler_contract.py test_living_info_service.py test_content_sync_living_info.py`: `28 passed`
+
+# PHASE 6 ??Facebook Publish Boundary / Dry-Run Validation
+
+AREA: CONTENT_PUBLISHER + FACEBOOK_STATUS + CONTENT_QUEUE
+
+MODE: PROTECTED_CHANGE
+
+PURPOSE FUNCTION:
+Verify that living-info candidates can pass or fail Facebook publish quality gates safely, without real Facebook posting.
+
+FOCUS:
+Validate only the dry-run/protected publish path:
+
+```text
+content.content_candidate
+-> content_quality_gate()
+-> build_facebook_message()
+-> dry-run publish result
+-> publish_log dry-run
+```
+
+Real Facebook post is forbidden.
+
+ALLOWED CHANGES:
+
+* dry-run validation tests
+* message quality checks
+* Facebook link/message validation report
+* quality gate fixes if they do not weaken safety
+* report files
+
+FORBIDDEN CHANGES:
+
+* real Facebook post
+* token refresh automation
+* publish frequency changes
+* real publish enabled by default
+* env/secrets changes
+* scheduler enabling
+* bypassing quality gates
+
+VERIFICATION:
+
+* dry-run publish path works for eligible candidate
+* invalid link/message is blocked
+* gate failures are recorded with reason
+* no real Facebook API post occurs
+* token values are not logged
+
+STOP CONDITIONS:
+
+* real publish is required to verify
+* token/env changes are required
+* quality gate would need to be weakened
+
+REPORT:
+Save `phase-06-living-info-facebook-dry-run-boundary-result.md`.
+
+---
+
+## PHASE 6 Execution Result
+
+- Status: COMPLETE
+- Report: `DOC/walkthrough/execution-history/2026-06-28/phase-06-living-info-facebook-dry-run-boundary-result.md`
+- Implemented:
+  - protected dry-run state is calculated before Facebook link/message validation
+  - dry-run validation failures are recorded with `dry_run=True`
+- Verified:
+  - eligible `LIVING_INFO` candidate returns `DRY_RUN`
+  - invalid link is blocked as `FACEBOOK_LINK_INVALID`
+  - invalid message is blocked as `FACEBOOK_MESSAGE_INVALID`
+  - quality gate failure is recorded with reason
+  - no real Facebook client call
+  - no token values in dry-run request payload
+- Safety:
+  - no real Facebook post
+  - no token refresh automation change
+  - no env/secrets change
+  - no scheduler/publish frequency change
+  - no quality gate bypass
+- Verification:
+  - `python -m py_compile`: PASS
+  - `pytest test_living_info_facebook_dry_run_boundary.py test_living_info_telegram_review_flow.py test_living_info_content_prep_scheduler_contract.py test_living_info_service.py test_content_sync_living_info.py test_content_exclusion_gate.py`: `35 passed`
+
+# PHASE 7 ??Final Integration Review Report
+
+AREA: CONTENT_QUEUE + LIVING_DOMAIN + SYSTEM_ARCHITECTURE_DOCS
+
+MODE: READ_ONLY_AUDIT
+
+PURPOSE FUNCTION:
+Produce a final integration review report after PHASE 1-6, so a separate reviewer can verify the committed GitHub code.
+
+FOCUS:
+Write a final report summarizing the full implemented and verified path.
+
+Report must include:
+
+```text
+1. Final status
+2. Implemented path
+3. Remaining disconnected path
+4. Files modified by phase
+5. Tests/checks run
+6. DB effects
+7. External output risk result
+8. Scheduler default state
+9. Telegram state
+10. Facebook state
+11. Known remaining risks
+12. Next required user action
+13. Exact GitHub commit/branch info if available
+14. Reviewer checklist for ChatGPT @GitHub verification
+```
+
+The reviewer checklist must allow this follow-up prompt:
+
+```text
+@GitHub
+
+Review the latest committed code for the WorkConnect living-info phased execution.
+
+Verify:
+- PHASE 1 manual trigger exists and calls only sync_living_info()
+- PHASE 2 E2E dry-run/test proves READY_TO_REVIEW candidate creation
+- PHASE 3 topic_cluster path exists or is clearly reported as pending
+- PHASE 4 scheduler is disabled by default and does not publish
+- PHASE 5 Telegram path is dry-run/suppressed and does not production-send
+- PHASE 6 Facebook path is dry-run only and cannot real-post by default
+- No auth/env/secrets/destructive migration was changed
+- No publisher gate was weakened
+- Reports were saved
+- Final status is credible
+```
+
+FORBIDDEN CHANGES:
+
+* runtime behavior changes in PHASE 7
+* code changes
+* DB changes
+* scheduler/publisher/auth/env changes
+
+VERIFICATION:
+
+* report file exists
+* reports for PHASE 1-6 exist or skipped/stopped reason is documented
+* completion marker count remains correct
+* final report says exactly which phases completed, skipped, or stopped
+
+REPORT:
+Save `phase-07-living-info-final-integration-review.md`.
+
+FINAL OUTPUT:
+End with one of:
+
+```text
+PHASED_EXECUTION_COMPLETE_READY_FOR_GITHUB_REVIEW
+PHASED_EXECUTION_PARTIAL_READY_FOR_GITHUB_REVIEW
+STOP_REQUIRES_USER_REVIEW
+```
+
+## PHASE 7 Execution Result
+
+- Status: COMPLETE
+- Report: `DOC/walkthrough/execution-history/2026-06-28/phase-07-living-info-final-integration-review.md`
+- Final status: `PHASED_EXECUTION_COMPLETE_READY_FOR_GITHUB_REVIEW`
+- Verified:
+  - PHASE 1-6 reports exist
+  - final integration report exists
+  - Python py_compile PASS
+  - pytest living-info/content boundary suite: `47 passed`
+  - Admin UI `npm run build`: PASS
+- Git info:
+  - branch: `main`
+  - HEAD: `b09e4df`
+  - commit/push in this execution: none
 
 [WC_EXECUTION_COMPLETE]

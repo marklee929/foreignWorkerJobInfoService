@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "mode": "community-only",
+  "result": {
+    "source": "living_info.topic_cluster",
+    "seen_count": 1,
+    "synced_count": 0,
+    "skipped_count": 1,
+    "skipped_reasons": {
+      "missing_source_evidence": 1
+    }
+  },
+  "created_candidates": [],
+  "evidence_requests": [
+    77
+  ],
+  "external_output": {
+    "telegram_sent": false,
+    "facebook_posted": false
+  }
+}

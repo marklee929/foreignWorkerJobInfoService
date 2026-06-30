@@ -228,3 +228,13 @@ The system boundary is healthy when:
 - Local LLM remains optional
 - protected publishing, scheduler, auth, and bot-state areas cannot be changed casually
 - Python and Java workflow ownership questions are handled by explicit future audits, not silent assumptions
+
+## Repository Boundary
+
+Current primary implementation repository:
+
+- `marklee929/foreignWorkerJobInfoService`
+- `https://github.com/marklee929/foreignWorkerJobInfoService`
+
+This repository is the default GitHub target for WorkConnect code inspection unless a task explicitly specifies another repository.
+

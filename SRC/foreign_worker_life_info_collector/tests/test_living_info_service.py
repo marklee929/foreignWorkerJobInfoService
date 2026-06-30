@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from foreign_worker_life_info_collector.living_info.service import (
     LivingInfoService,
+    build_topic_clusters,
     normalize_category,
     social_news_payload_to_normalized_item,
     social_news_payload_to_source_item,
@@ -14,6 +15,7 @@ class FakeRepository:
     def __init__(self) -> None:
         self.source_items = []
         self.normalized_items = []
+        self.cluster_items = []
 
     def upsert_source_item(self, item):
         self.source_items.append(item)
@@ -22,6 +24,17 @@ class FakeRepository:
     def upsert_normalized_item(self, item):
         self.normalized_items.append(item)
         return 202
+
+    def list_normalized_items_for_clustering(self, limit=100):
+        return sample_normalized_cluster_items()[:limit]
+
+    def upsert_topic_cluster(self, cluster):
+        self.source_items.append(cluster)
+        return 303
+
+    def upsert_topic_cluster_item_normalized(self, **payload):
+        self.cluster_items.append(payload)
+        return len(self.cluster_items)
 
 
 def sample_living_payload() -> dict:
@@ -137,6 +150,100 @@ def sample_topic_evidence() -> list[dict]:
             "weight_score": 1,
         }
     ]
+
+
+def sample_normalized_cluster_items() -> list[dict]:
+    return [
+        {
+            "normalized_item_id": 601,
+            "source_item_id": 501,
+            "normalized_primary_category": "HEALTHCARE",
+            "normalized_secondary_category": "insurance",
+            "source_usage": "TOPIC_CLUSTER_MATERIAL",
+            "info_signal_type": "INFORMATIONAL",
+            "target_user": "FOREIGN_RESIDENTS_IN_KOREA",
+            "action_type": "PRACTICAL_CHECK",
+            "topic_key_candidate": "healthcare:insurance-check",
+            "actionability_score": 80,
+            "repeatability_score": 90,
+            "source_reliability_score": 95,
+            "normalization_confidence": 88,
+            "status": "NORMALIZED",
+            "source_url": "https://www.nhis.or.kr/guide",
+            "canonical_url": "https://www.nhis.or.kr/guide",
+            "publishable_link_url": "https://www.nhis.or.kr/guide",
+            "source_name": "NHIS",
+            "source_type": "OFFICIAL",
+            "source_trust_level": "PRIMARY",
+            "raw_title": "Health insurance guide",
+            "raw_summary": "Foreign residents should confirm health insurance status before clinic visits.",
+            "published_at": "2026-06-28T00:00:00+00:00",
+            "collected_at": "2026-06-28T01:00:00+00:00",
+        },
+        {
+            "normalized_item_id": 602,
+            "source_item_id": 502,
+            "normalized_primary_category": "HEALTHCARE",
+            "normalized_secondary_category": "insurance",
+            "source_usage": "SOURCE_EVIDENCE",
+            "info_signal_type": "INFORMATIONAL",
+            "target_user": "FOREIGN_RESIDENTS_IN_KOREA",
+            "action_type": "PRACTICAL_CHECK",
+            "topic_key_candidate": "healthcare:insurance-check",
+            "actionability_score": 70,
+            "repeatability_score": 85,
+            "source_reliability_score": 80,
+            "normalization_confidence": 75,
+            "status": "NORMALIZED",
+            "source_url": "https://www.koreaherald.com/guide",
+            "canonical_url": "https://www.koreaherald.com/guide",
+            "publishable_link_url": "https://www.koreaherald.com/guide",
+            "source_name": "The Korea Herald",
+            "source_type": "MEDIA",
+            "source_trust_level": "TRUSTED_MEDIA",
+            "raw_title": "Health insurance reminder",
+            "raw_summary": "A trusted media explainer.",
+            "published_at": "2026-06-27T00:00:00+00:00",
+            "collected_at": "2026-06-27T01:00:00+00:00",
+        },
+    ]
+
+
+def test_build_topic_clusters_uses_source_evidence_only() -> None:
+    plans = build_topic_clusters(sample_normalized_cluster_items())
+
+    assert len(plans) == 1
+    cluster = plans[0]["cluster"]
+    assert cluster.topic_key == "healthcare:insurance-check"
+    assert cluster.evidence_count == 2
+    assert cluster.community_signal_count == 0
+    assert cluster.official_source_count == 1
+    assert cluster.secondary_source_count == 1
+    assert cluster.source_spread_count == 2
+    assert cluster.validation_status == "VALIDATED"
+    assert cluster.public_candidate_ready_yn == "Y"
+    assert plans[0]["items"][0]["item_role"] == "REPRESENTATIVE"
+
+
+def test_prepare_topic_clusters_dry_run_does_not_write() -> None:
+    repository = FakeRepository()
+    result = LivingInfoService(repository=repository).prepare_topic_clusters(limit=10, dry_run=True)
+
+    assert result["dry_run"] is True
+    assert result["seen_count"] == 2
+    assert result["cluster_count"] == 1
+    assert result["written_count"] == 0
+    assert repository.cluster_items == []
+
+
+def test_prepare_topic_clusters_execute_writes_cluster_and_links() -> None:
+    repository = FakeRepository()
+    result = LivingInfoService(repository=repository).prepare_topic_clusters(limit=10, dry_run=False)
+
+    assert result["dry_run"] is False
+    assert result["written_count"] == 1
+    assert result["clusters"][0]["topic_cluster_id"] == 303
+    assert [item["normalized_item_id"] for item in repository.cluster_items] == [601, 602]
 
 
 def test_topic_cluster_payload_creates_ready_to_review_content_candidate() -> None:

@@ -13,6 +13,7 @@ import {
   scoreContentCandidate,
   sendContentCandidateToTelegram,
   syncContentCandidates,
+  syncLivingInfoContentCandidates,
 } from '../services/apiClient'
 import { logoutAdmin, resetDeviceId } from '../services/authService'
 
@@ -22,9 +23,11 @@ const detail = ref(null)
 const publishLogs = ref([])
 const loading = ref(false)
 const syncing = ref(false)
+const livingInfoSyncing = ref(false)
 const actioningId = ref(0)
 const loadError = ref('')
 const actionMessage = ref('')
+const livingInfoSyncResult = ref(null)
 const searchText = ref('')
 const statusFilter = ref('')
 const sourceFilter = ref('')
@@ -174,6 +177,28 @@ async function syncAll() {
   }
 }
 
+async function syncLivingInfo() {
+  if (livingInfoSyncing.value) return
+  livingInfoSyncing.value = true
+  actionMessage.value = ''
+  loadError.value = ''
+  livingInfoSyncResult.value = null
+  try {
+    const result = await syncLivingInfoContentCandidates({ limit: 100 })
+    livingInfoSyncResult.value = result
+    actionMessage.value = `Living info prepared: seen ${result.seen_count || 0}, synced ${result.synced_count || 0}, skipped ${result.skipped_count || 0}`
+    sourceFilter.value = 'LIVING_INFO'
+    statusFilter.value = 'READY_TO_REVIEW'
+    publishableOnly.value = false
+    page.value = 1
+    await loadAll()
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : 'Living info preparation failed.'
+  } finally {
+    livingInfoSyncing.value = false
+  }
+}
+
 async function openDetail(row) {
   detail.value = null
   publishLogs.value = []
@@ -267,6 +292,10 @@ onMounted(loadAll)
               <Shuffle :size="16" />
               콘텐츠 동기화
             </button>
+            <button class="btn-secondary inline-flex items-center gap-xs" type="button" :disabled="livingInfoSyncing" @click="syncLivingInfo">
+              <Shuffle :size="16" />
+              Living info prepare
+            </button>
             <button class="btn-secondary inline-flex items-center gap-xs" type="button" :disabled="loading" @click="loadAll">
               <RefreshCw :size="16" />
               새로고침
@@ -276,6 +305,12 @@ onMounted(loadAll)
 
         <p v-if="loadError" class="mb-md rounded border border-error bg-error-container px-md py-sm text-body-sm text-error">{{ loadError }}</p>
         <p v-if="actionMessage" class="mb-md rounded border border-success bg-success-container px-md py-sm text-body-sm text-success">{{ actionMessage }}</p>
+        <p v-if="livingInfoSyncResult" class="mb-md rounded border border-outline-variant bg-surface-container-low px-md py-sm text-body-sm">
+          living_info.topic_cluster manual sync:
+          seen {{ livingInfoSyncResult.seen_count || 0 }},
+          synced {{ livingInfoSyncResult.synced_count || 0 }},
+          skipped {{ livingInfoSyncResult.skipped_count || 0 }}
+        </p>
 
         <div class="grid gap-md md:grid-cols-3 xl:grid-cols-6">
           <article v-for="card in cards" :key="card.label" class="rounded border border-outline-variant bg-surface-container-low p-md">

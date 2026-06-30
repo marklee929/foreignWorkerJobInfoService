@@ -265,6 +265,84 @@ class LivingInfoRepository:
                 rows = cur.fetchall()
         return [source_item_row(row) for row in rows]
 
+    def list_normalized_items_for_clustering(self, limit: int = 100) -> list[dict[str, Any]]:
+        self.require_schema_ready()
+        limit = max(1, min(int(limit or 100), 500))
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        ni.id AS normalized_item_id,
+                        ni.source_item_id,
+                        ni.normalized_primary_category,
+                        ni.normalized_secondary_category,
+                        ni.source_usage,
+                        ni.info_signal_type,
+                        ni.target_user,
+                        ni.action_type,
+                        ni.topic_key_candidate,
+                        ni.actionability_score,
+                        ni.repeatability_score,
+                        ni.source_reliability_score,
+                        ni.normalization_confidence,
+                        ni.status,
+                        si.source_url,
+                        si.canonical_url,
+                        si.publishable_link_url,
+                        si.source_name,
+                        si.source_type,
+                        si.source_trust_level,
+                        si.raw_title,
+                        si.raw_summary,
+                        si.published_at,
+                        si.collected_at
+                    FROM living_info.normalized_item ni
+                    JOIN living_info.source_item si
+                      ON si.id = ni.source_item_id
+                    WHERE COALESCE(ni.topic_key_candidate, '') <> ''
+                      AND ni.source_usage IN ('TOPIC_CLUSTER_MATERIAL', 'SOURCE_EVIDENCE')
+                      AND COALESCE(ni.status, '') NOT IN ('BLOCKED', 'SKIPPED')
+                      AND COALESCE(si.active_yn, 'Y') = 'Y'
+                      AND COALESCE(si.source_url, '') <> ''
+                    ORDER BY ni.updated_at DESC, si.collected_at DESC NULLS LAST, ni.id DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                rows = cur.fetchall()
+        return [normalized_cluster_item_row(row) for row in rows]
+
+    def upsert_topic_cluster_item_normalized(
+        self,
+        *,
+        topic_cluster_id: int,
+        normalized_item_id: int,
+        item_role: str = "EVIDENCE",
+        weight_score: float = 1.0,
+    ) -> int:
+        self.require_schema_ready()
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO living_info.topic_cluster_item (
+                        topic_cluster_id, normalized_item_id, source_signal_id, item_role, weight_score
+                    )
+                    VALUES (%s, %s, NULL, %s, %s)
+                    ON CONFLICT (topic_cluster_id, normalized_item_id)
+                    WHERE normalized_item_id IS NOT NULL
+                    DO UPDATE
+                    SET item_role = EXCLUDED.item_role,
+                        weight_score = EXCLUDED.weight_score
+                    RETURNING id
+                    """,
+                    (int(topic_cluster_id), int(normalized_item_id), item_role, float(weight_score or 0)),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return int(row[0]) if row else 0
+
     def list_ready_topic_clusters(self, limit: int = 100) -> list[dict[str, Any]]:
         self.require_schema_ready()
         limit = max(1, min(int(limit or 100), 500))
@@ -549,6 +627,48 @@ def topic_cluster_evidence_row(row: tuple[Any, ...]) -> dict[str, Any]:
         "weight_score",
     ):
         result[key] = float(result.get(key) or 0)
+    return result
+
+
+def normalized_cluster_item_row(row: tuple[Any, ...]) -> dict[str, Any]:
+    keys = (
+        "normalized_item_id",
+        "source_item_id",
+        "normalized_primary_category",
+        "normalized_secondary_category",
+        "source_usage",
+        "info_signal_type",
+        "target_user",
+        "action_type",
+        "topic_key_candidate",
+        "actionability_score",
+        "repeatability_score",
+        "source_reliability_score",
+        "normalization_confidence",
+        "status",
+        "source_url",
+        "canonical_url",
+        "publishable_link_url",
+        "source_name",
+        "source_type",
+        "source_trust_level",
+        "raw_title",
+        "raw_summary",
+        "published_at",
+        "collected_at",
+    )
+    result = dict(zip(keys, row))
+    for key in ("published_at", "collected_at"):
+        result[key] = isoformat(result.get(key))
+    for key in (
+        "actionability_score",
+        "repeatability_score",
+        "source_reliability_score",
+        "normalization_confidence",
+    ):
+        result[key] = float(result.get(key) or 0)
+    for key in ("normalized_item_id", "source_item_id"):
+        result[key] = int(result.get(key) or 0)
     return result
 
 

@@ -113,6 +113,20 @@ IMMIGRATION_BOT_STATUS = {
 }
 IMMIGRATION_BOT_LOCK = threading.Lock()
 IMMIGRATION_BOT_THREAD: threading.Thread | None = None
+LIVING_INFO_CONTENT_PREP_STATUS = {
+    "status": "DISABLED",
+    "message": "living info content preparation scheduler is disabled by default",
+    "schedulerEnabled": False,
+    "nextRunAt": None,
+    "lastStartedAt": None,
+    "lastStoppedAt": None,
+    "lastErrorAt": None,
+    "lastErrorMessage": None,
+    "lastResult": None,
+}
+LIVING_INFO_CONTENT_PREP_LOCK = threading.Lock()
+LIVING_INFO_CONTENT_PREP_STOP = threading.Event()
+LIVING_INFO_CONTENT_PREP_THREAD: threading.Thread | None = None
 JOB_COLLECTOR_STATUS = {
     "status": "STOPPED",
     "lastErrorMessage": None,
@@ -913,6 +927,142 @@ def stop_content_bot() -> dict[str, Any]:
         return set_content_bot_status("STOPPING", "콘텐츠 생성 봇 종료 요청")
     CONTENT_BOT_STOP_EVENT.set()
     return set_content_bot_status("STOPPED", "콘텐츠 생성 봇 중지됨")
+
+
+def env_flag(name: str, default: str = "false") -> bool:
+    return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def living_info_content_prep_settings() -> dict[str, Any]:
+    return {
+        "enabled": env_flag("LIVING_INFO_CONTENT_PREP_ENABLED", "false"),
+        "intervalMinutes": max(20, int(os.environ.get("LIVING_INFO_CONTENT_PREP_INTERVAL_MINUTES", "60") or "60")),
+        "limit": max(1, min(int(os.environ.get("LIVING_INFO_CONTENT_PREP_LIMIT", "20") or "20"), 100)),
+    }
+
+
+def living_info_content_prep_status() -> dict[str, Any]:
+    settings = living_info_content_prep_settings()
+    with LIVING_INFO_CONTENT_PREP_LOCK:
+        if not settings["enabled"]:
+            LIVING_INFO_CONTENT_PREP_STATUS["status"] = "DISABLED"
+            LIVING_INFO_CONTENT_PREP_STATUS["schedulerEnabled"] = False
+            LIVING_INFO_CONTENT_PREP_STATUS["nextRunAt"] = None
+        payload = dict(LIVING_INFO_CONTENT_PREP_STATUS)
+    payload["settings"] = settings
+    payload["threadAlive"] = bool(LIVING_INFO_CONTENT_PREP_THREAD and LIVING_INFO_CONTENT_PREP_THREAD.is_alive())
+    return payload
+
+
+def set_living_info_content_prep_status(
+    status: str,
+    message: str = "",
+    *,
+    result: dict[str, Any] | None = None,
+    error_message: str | None = None,
+    next_run_at: str | None = None,
+) -> dict[str, Any]:
+    now = utc_iso_now()
+    with LIVING_INFO_CONTENT_PREP_LOCK:
+        LIVING_INFO_CONTENT_PREP_STATUS["status"] = status
+        if message:
+            LIVING_INFO_CONTENT_PREP_STATUS["message"] = message
+        if result is not None:
+            LIVING_INFO_CONTENT_PREP_STATUS["lastResult"] = result
+        if next_run_at is not None:
+            LIVING_INFO_CONTENT_PREP_STATUS["nextRunAt"] = next_run_at
+        if status in {"RUNNING", "STARTING"}:
+            LIVING_INFO_CONTENT_PREP_STATUS["lastStartedAt"] = now
+            LIVING_INFO_CONTENT_PREP_STATUS["lastErrorMessage"] = None
+        elif status in {"STOPPED", "DISABLED"}:
+            LIVING_INFO_CONTENT_PREP_STATUS["lastStoppedAt"] = now
+            LIVING_INFO_CONTENT_PREP_STATUS["lastErrorMessage"] = None
+        elif status == "ERROR":
+            LIVING_INFO_CONTENT_PREP_STATUS["lastErrorAt"] = now
+            LIVING_INFO_CONTENT_PREP_STATUS["lastErrorMessage"] = (error_message or message or "unknown error")[:500]
+        return dict(LIVING_INFO_CONTENT_PREP_STATUS)
+
+
+def run_living_info_content_prep_cycle(limit: int = 20, dry_run: bool = True) -> dict[str, Any]:
+    limit = max(1, min(int(limit or 20), 100))
+    prepare = content_service().prepare_living_info_topic_clusters(limit=limit, dry_run=bool(dry_run))
+    sync = {
+        "source": "living_info.topic_cluster",
+        "dry_run": True,
+        "seen_count": 0,
+        "synced_count": 0,
+        "skipped_count": 0,
+        "skipped_reasons": {},
+        "message": "dry-run skipped content_candidate writes",
+    }
+    if not dry_run:
+        sync = content_service().sync_living_info(limit=limit)
+    result = {
+        "ok": True,
+        "dry_run": bool(dry_run),
+        "limit": limit,
+        "prepare": prepare,
+        "sync": sync,
+        "external_output": "NONE",
+        "publish": "BLOCKED",
+        "telegram": "NOT_SENT",
+    }
+    write_bot_log(
+        "living_info_content_prep",
+        "DRY_RUN" if dry_run else "COMPLETED",
+        (
+            f"living info prep dry_run={bool(dry_run)} "
+            f"seen={prepare.get('seen_count', 0)} clusters={prepare.get('cluster_count', 0)} "
+            f"written={prepare.get('written_count', 0)} synced={sync.get('synced_count', 0)} "
+            f"skipped={sync.get('skipped_count', 0)}"
+        ),
+    )
+    set_living_info_content_prep_status("STOPPED", "living info content preparation cycle completed", result=result)
+    return result
+
+
+def run_living_info_content_prep_scheduler() -> None:
+    settings = living_info_content_prep_settings()
+    if not settings["enabled"]:
+        set_living_info_content_prep_status("DISABLED", "LIVING_INFO_CONTENT_PREP_ENABLED=false")
+        return
+    set_living_info_content_prep_status("RUNNING", "living info content preparation scheduler running")
+    try:
+        while not LIVING_INFO_CONTENT_PREP_STOP.is_set():
+            result = run_living_info_content_prep_cycle(limit=int(settings["limit"]), dry_run=False)
+            interval_seconds = max(20, int(settings["intervalMinutes"])) * 60
+            next_run = datetime.now(timezone.utc) + timedelta(seconds=interval_seconds)
+            set_living_info_content_prep_status(
+                "RUNNING",
+                "living info content preparation scheduler waiting",
+                result=result,
+                next_run_at=next_run.isoformat(),
+            )
+            if LIVING_INFO_CONTENT_PREP_STOP.wait(interval_seconds):
+                break
+        set_living_info_content_prep_status("STOPPED", "living info content preparation scheduler stopped")
+    except Exception as exc:
+        set_living_info_content_prep_status("ERROR", "living info content preparation scheduler failed", error_message=str(exc))
+        write_bot_log("living_info_content_prep", "FAILED", f"living info prep scheduler failed: {str(exc)[:180]}")
+
+
+def start_living_info_content_prep_scheduler_if_enabled() -> dict[str, Any]:
+    global LIVING_INFO_CONTENT_PREP_THREAD
+    settings = living_info_content_prep_settings()
+    if not settings["enabled"]:
+        return set_living_info_content_prep_status("DISABLED", "LIVING_INFO_CONTENT_PREP_ENABLED=false")
+    if LIVING_INFO_CONTENT_PREP_THREAD and LIVING_INFO_CONTENT_PREP_THREAD.is_alive():
+        return living_info_content_prep_status()
+    LIVING_INFO_CONTENT_PREP_STOP.clear()
+    with LIVING_INFO_CONTENT_PREP_LOCK:
+        LIVING_INFO_CONTENT_PREP_STATUS["schedulerEnabled"] = True
+    LIVING_INFO_CONTENT_PREP_THREAD = threading.Thread(
+        target=run_living_info_content_prep_scheduler,
+        name="workconnect-living-info-content-prep",
+        daemon=True,
+    )
+    LIVING_INFO_CONTENT_PREP_THREAD.start()
+    return living_info_content_prep_status()
 
 
 class SingleKeywordNewsCollector:
@@ -3142,6 +3292,8 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(format_bot_status(bot_runtime_row()))
             elif path == "/api/admin/content-bot/status":
                 self._send_json(content_bot_status())
+            elif path == "/api/admin/content/living-info/prep-status":
+                self._send_json(living_info_content_prep_status())
             elif path == "/api/admin/lifestyle-bot/status":
                 self._send_json(lifestyle_bot_status())
             elif path == "/api/admin/immigration-bot/status":
@@ -3260,6 +3412,25 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 limit = int(payload.get("limit") or 200) if isinstance(payload, dict) else 200
                 self._send_json(content_service().sync_all(limit=max(1, min(limit, 1000))))
+            elif path == "/api/admin/content/living-info/sync":
+                payload = self._read_json()
+                limit = int(payload.get("limit") or 100) if isinstance(payload, dict) else 100
+                self._send_json(content_service().sync_living_info(limit=max(1, min(limit, 500))))
+            elif path == "/api/admin/content/living-info/prepare-clusters":
+                payload = self._read_json()
+                limit = int(payload.get("limit") or 100) if isinstance(payload, dict) else 100
+                execute = bool(payload.get("execute")) if isinstance(payload, dict) else False
+                self._send_json(
+                    content_service().prepare_living_info_topic_clusters(
+                        limit=max(1, min(limit, 500)),
+                        dry_run=not execute,
+                    )
+                )
+            elif path == "/api/admin/content/living-info/prep-cycle":
+                payload = self._read_json()
+                limit = int(payload.get("limit") or 20) if isinstance(payload, dict) else 20
+                dry_run = bool(payload.get("dryRun", True)) if isinstance(payload, dict) else True
+                self._send_json(run_living_info_content_prep_cycle(limit=max(1, min(limit, 100)), dry_run=dry_run))
             elif path.startswith("/api/admin/content/candidates/") and path.endswith("/send-telegram-review"):
                 raw_id = path.split("/")[-2]
                 candidate = content_candidate_detail(int(raw_id))
@@ -3619,6 +3790,7 @@ def initialize_admin_runtime() -> None:
     if job_collector_settings().get("schedulerEnabled"):
         print("[job-collector] persisted scheduler flag found; restarting scheduler", flush=True)
         start_job_scheduler()
+    start_living_info_content_prep_scheduler_if_enabled()
     print(f"[llama] {ensure_llama(start_command=True)['message']}", flush=True)
     start_article_cleanup_scheduler()
     start_telegram_update_poller()
