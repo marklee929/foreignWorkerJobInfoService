@@ -599,6 +599,88 @@ class ContentService:
 
         return build_content_card_preview(candidate)
 
+    def generate_card_preview_dry_run(
+        self,
+        candidate_id: int,
+        source: str = "manual_card_preview_dry_run",
+    ) -> dict[str, Any]:
+        candidate = self.repository.get_candidate(candidate_id)
+        if not candidate:
+            return {
+                "ok": False,
+                "candidate_id": candidate_id,
+                "status": "NOT_FOUND",
+                "message": "content candidate not found",
+            }
+        preview = self.telegram_review_card_preview(candidate)
+        status = "CARD_PREVIEW_DRY_RUN" if preview.get("ok") else "CARD_PREVIEW_FAILED"
+        log_id = self.repository.record_content_card_preview(
+            candidate_id=candidate_id,
+            status=status,
+            preview=preview,
+            source=source,
+        )
+        return {
+            "ok": True,
+            "candidate_id": candidate_id,
+            "source_domain": candidate.get("source_domain") or "",
+            "content_type": candidate.get("content_type") or "",
+            "status": status,
+            "log_id": log_id,
+            "content_card_preview": preview,
+        }
+
+    def generate_living_info_card_previews(self, limit: int = 20, status: str = "READY_TO_REVIEW") -> dict[str, Any]:
+        candidates = self.repository.list_living_info_card_preview_targets(limit=limit, status=status)
+        items: list[dict[str, Any]] = []
+        generated_count = 0
+        failed_count = 0
+        skipped_count = 0
+        for candidate in candidates:
+            candidate_id = int(candidate.get("id") or 0)
+            if candidate_id <= 0 or str(candidate.get("source_domain") or "").upper() != "LIVING_INFO":
+                skipped_count += 1
+                items.append(
+                    {
+                        "candidate_id": candidate_id,
+                        "status": "SKIPPED",
+                        "preview_status": "SKIPPED_NON_LIVING_INFO",
+                        "reason": "bulk card preview is limited to LIVING_INFO candidates",
+                    }
+                )
+                continue
+            result = self.generate_card_preview_dry_run(
+                candidate_id,
+                source="bulk_living_info_card_preview_dry_run",
+            )
+            preview = result.get("content_card_preview") if isinstance(result.get("content_card_preview"), dict) else {}
+            if result.get("status") == "CARD_PREVIEW_DRY_RUN":
+                generated_count += 1
+            elif result.get("status") == "CARD_PREVIEW_FAILED":
+                failed_count += 1
+            else:
+                skipped_count += 1
+            items.append(
+                {
+                    "candidate_id": candidate_id,
+                    "status": result.get("status") or "",
+                    "preview_status": preview.get("status") or "",
+                    "reason": preview.get("reason") or result.get("message") or "",
+                    "image_path": preview.get("image_path") or "",
+                    "image_name": preview.get("image_name") or "",
+                    "template_type": preview.get("template_type") or "",
+                    "log_id": result.get("log_id") or 0,
+                }
+            )
+        return {
+            "ok": True,
+            "seen_count": len(candidates),
+            "generated_count": generated_count,
+            "failed_count": failed_count,
+            "skipped_count": skipped_count,
+            "items": items,
+        }
+
     def apply_operator_score(self, candidate_id: int, score: float, comment: str = "") -> dict[str, Any]:
         return self.repository.apply_operator_score(candidate_id, score, comment=comment)
 

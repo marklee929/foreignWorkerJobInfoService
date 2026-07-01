@@ -10,6 +10,8 @@ import {
   fetchContentCandidateDetail,
   fetchContentCandidates,
   fetchContentDashboard,
+  generateContentCandidateCardPreview,
+  generateLivingInfoCardPreviews,
   scoreContentCandidate,
   sendContentCandidateToTelegram,
   syncContentCandidates,
@@ -24,10 +26,14 @@ const publishLogs = ref([])
 const loading = ref(false)
 const syncing = ref(false)
 const livingInfoSyncing = ref(false)
+const cardPreviewing = ref(false)
+const bulkCardPreviewing = ref(false)
 const actioningId = ref(0)
 const loadError = ref('')
 const actionMessage = ref('')
 const livingInfoSyncResult = ref(null)
+const cardPreviewResult = ref(null)
+const bulkCardPreviewResult = ref(null)
 const searchText = ref('')
 const statusFilter = ref('')
 const sourceFilter = ref('')
@@ -66,6 +72,11 @@ const rowRange = computed(() => {
   if (!totalCount.value) return '0-0'
   const start = (page.value - 1) * pageSize + 1
   return `${start}-${Math.min(start + pageSize - 1, totalCount.value)}`
+})
+
+const latestCardPreview = computed(() => {
+  const log = publishLogs.value.find((item) => item.content_card_preview)
+  return log?.content_card_preview || null
 })
 
 const cards = computed(() => [
@@ -199,6 +210,31 @@ async function syncLivingInfo() {
   }
 }
 
+async function generateLivingInfoCardPreviewBatch() {
+  if (bulkCardPreviewing.value) return
+  bulkCardPreviewing.value = true
+  actionMessage.value = ''
+  loadError.value = ''
+  bulkCardPreviewResult.value = null
+  try {
+    const result = await generateLivingInfoCardPreviews({ limit: 20, status: 'READY_TO_REVIEW' })
+    bulkCardPreviewResult.value = result
+    actionMessage.value = `Living info card preview: generated ${result.generated_count || 0}, failed ${result.failed_count || 0}, skipped ${result.skipped_count || 0}`
+    sourceFilter.value = 'LIVING_INFO'
+    statusFilter.value = 'READY_TO_REVIEW'
+    publishableOnly.value = false
+    page.value = 1
+    await loadAll()
+    if (detail.value?.id) {
+      await openDetail(detail.value)
+    }
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : 'Living info card preview failed.'
+  } finally {
+    bulkCardPreviewing.value = false
+  }
+}
+
 async function openDetail(row) {
   detail.value = null
   publishLogs.value = []
@@ -225,6 +261,29 @@ async function sendTelegramReview(row) {
     loadError.value = error instanceof Error ? error.message : 'Telegram 검토 전송에 실패했습니다.'
   } finally {
     actioningId.value = 0
+  }
+}
+
+async function generateCardPreview(row) {
+  const target = row || detail.value
+  if (!target?.id || actioningId.value) return
+  cardPreviewing.value = true
+  actioningId.value = target.id
+  actionMessage.value = ''
+  loadError.value = ''
+  cardPreviewResult.value = null
+  try {
+    const result = await generateContentCandidateCardPreview(target.id, {})
+    cardPreviewResult.value = result
+    const preview = result.content_card_preview || {}
+    actionMessage.value = `Card preview: ${result.status || '-'} / ${preview.status || '-'}`
+    await loadAll()
+    await openDetail(target)
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : 'Card preview generation failed.'
+  } finally {
+    actioningId.value = 0
+    cardPreviewing.value = false
   }
 }
 
@@ -296,6 +355,10 @@ onMounted(loadAll)
               <Shuffle :size="16" />
               Living info prepare
             </button>
+            <button class="btn-secondary inline-flex items-center gap-xs" type="button" :disabled="bulkCardPreviewing" @click="generateLivingInfoCardPreviewBatch">
+              <Shuffle :size="16" />
+              Living info card preview
+            </button>
             <button class="btn-secondary inline-flex items-center gap-xs" type="button" :disabled="loading" @click="loadAll">
               <RefreshCw :size="16" />
               새로고침
@@ -310,6 +373,13 @@ onMounted(loadAll)
           seen {{ livingInfoSyncResult.seen_count || 0 }},
           synced {{ livingInfoSyncResult.synced_count || 0 }},
           skipped {{ livingInfoSyncResult.skipped_count || 0 }}
+        </p>
+        <p v-if="bulkCardPreviewResult" class="mb-md rounded border border-outline-variant bg-surface-container-low px-md py-sm text-body-sm">
+          living_info card preview dry-run:
+          seen {{ bulkCardPreviewResult.seen_count || 0 }},
+          generated {{ bulkCardPreviewResult.generated_count || 0 }},
+          failed {{ bulkCardPreviewResult.failed_count || 0 }},
+          skipped {{ bulkCardPreviewResult.skipped_count || 0 }}
         </p>
 
         <div class="grid gap-md md:grid-cols-3 xl:grid-cols-6">
@@ -478,6 +548,9 @@ onMounted(loadAll)
             </dl>
             <p v-if="detail.review_required_yn" class="mt-md rounded border border-error bg-error-container p-sm text-body-sm text-error">검토 필요: {{ detail.review_reason || '사유 없음' }}</p>
             <div class="mt-md flex flex-wrap gap-xs">
+              <button class="btn-secondary" type="button" :disabled="cardPreviewing || actioningId === detail.id" @click="generateCardPreview(detail)">
+                Card preview
+              </button>
               <button v-for="score in [90, 75, 60, 40]" :key="score" class="btn-secondary" type="button" :disabled="actioningId === detail.id" @click="applyScore(score)">
                 {{ score }}점
               </button>
@@ -486,6 +559,18 @@ onMounted(loadAll)
 
           <article class="rounded border border-outline-variant bg-surface p-lg">
             <h3 class="mb-md text-title font-bold">검토/게시 로그</h3>
+            <div v-if="latestCardPreview" class="mb-sm rounded border p-sm text-body-sm" :class="cardPreviewClass(latestCardPreview)">
+              <div class="flex flex-wrap items-center justify-between gap-sm">
+                <b>Latest card preview</b>
+                <span class="font-mono text-label-sm">{{ latestCardPreview.status || '-' }}</span>
+              </div>
+              <dl class="mt-xs grid gap-xs text-label-sm">
+                <div class="flex justify-between gap-md"><dt>template</dt><dd class="font-mono">{{ latestCardPreview.template_type || '-' }}</dd></div>
+                <div v-if="latestCardPreview.image_name" class="flex justify-between gap-md"><dt>image</dt><dd class="font-mono">{{ latestCardPreview.image_name }}</dd></div>
+              </dl>
+              <p v-if="latestCardPreview.reason" class="mt-xs whitespace-pre-wrap">{{ latestCardPreview.reason }}</p>
+              <p v-if="latestCardPreview.image_path" class="mt-xs break-all font-mono text-[11px]">{{ latestCardPreview.image_path }}</p>
+            </div>
             <div v-for="log in publishLogs" :key="log.id" class="mb-sm rounded border border-outline-variant p-sm text-body-sm">
               <div class="flex justify-between gap-md">
                 <b>{{ log.status }}</b>

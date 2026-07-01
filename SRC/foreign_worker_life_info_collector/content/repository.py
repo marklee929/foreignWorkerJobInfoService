@@ -234,6 +234,43 @@ class ContentRepository:
                 ids = [int(row[0]) for row in cur.fetchall()]
         return [candidate for candidate in (self.get_candidate(item_id) for item_id in ids) if candidate]
 
+    def list_living_info_card_preview_targets(self, limit: int = 20, status: str = "READY_TO_REVIEW") -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 20), 100))
+        requested_status = str(status or "READY_TO_REVIEW").upper().strip()
+        allowed_statuses = {"READY_TO_REVIEW", "SCORED", "READY_TO_PUBLISH", "FAILED_RETRYABLE"}
+        if requested_status == "ALL":
+            statuses = ["READY_TO_REVIEW", "SCORED", "READY_TO_PUBLISH", "FAILED_RETRYABLE"]
+        elif requested_status in allowed_statuses:
+            statuses = [requested_status]
+        else:
+            statuses = ["READY_TO_REVIEW"]
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id
+                    FROM content.content_candidate candidate
+                    WHERE candidate.source_domain = 'LIVING_INFO'
+                      AND candidate.status = ANY(%s)
+                      AND candidate.status NOT IN ('POSTED', 'ARCHIVED')
+                    ORDER BY
+                        CASE candidate.status
+                            WHEN 'READY_TO_REVIEW' THEN 0
+                            WHEN 'READY_TO_PUBLISH' THEN 1
+                            WHEN 'FAILED_RETRYABLE' THEN 2
+                            ELSE 3
+                        END,
+                        candidate.final_publish_score DESC,
+                        COALESCE(candidate.original_collected_at, candidate.updated_at) DESC,
+                        candidate.content_updated_at DESC,
+                        candidate.id DESC
+                    LIMIT %s
+                    """,
+                    (statuses, limit),
+                )
+                ids = [int(row[0]) for row in cur.fetchall()]
+        return [candidate for candidate in (self.get_candidate(item_id) for item_id in ids) if candidate]
+
     def find_duplicate_telegram_review(self, review_metadata: dict[str, Any]) -> dict[str, Any]:
         review_key = str(review_metadata.get("telegram_review_key") or "")
         semantic_key = str(review_metadata.get("semantic_review_key") or "")
@@ -312,6 +349,56 @@ class ContentRepository:
                         str((response or {}).get("description") or (response or {}).get("error_message") or ""),
                         json.dumps(request_payload, ensure_ascii=False),
                         json.dumps(response or {}, ensure_ascii=False),
+                    ),
+                )
+                row = cur.fetchone()
+            conn.commit()
+        return int(row[0]) if row else 0
+
+    def record_content_card_preview(
+        self,
+        candidate_id: int,
+        status: str,
+        preview: dict[str, Any],
+        source: str = "manual_card_preview_dry_run",
+    ) -> int:
+        preview_payload = preview if isinstance(preview, dict) else {}
+        raw_payload = preview_payload.get("payload") if isinstance(preview_payload.get("payload"), dict) else {}
+        preview_status = str(preview_payload.get("status") or status or "")
+        preview_reason = str(preview_payload.get("reason") or "")
+        image_path = str(preview_payload.get("image_path") or "")
+        image_name = str(preview_payload.get("image_name") or "")
+        template_type = str(preview_payload.get("template_type") or raw_payload.get("template_type") or "")
+        request_payload = {
+            "source": source,
+            "content_candidate_id": candidate_id,
+            "content_card_preview": preview_payload,
+            "card_preview_status": preview_status,
+            "card_preview_reason": preview_reason,
+            "image_path": image_path,
+            "image_name": image_name,
+            "template_type": template_type,
+        }
+        message_preview = " ".join(part for part in (status, preview_status, preview_reason) if part)[:500]
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO content.publish_log(
+                        content_candidate_id, channel, status, dry_run, message_preview,
+                        link_url, error_code, error_message, request_payload, response_payload
+                    )
+                    VALUES (%s, 'content_card_preview', %s, TRUE, %s, '', %s, %s, %s::jsonb, %s::jsonb)
+                    RETURNING id
+                    """,
+                    (
+                        candidate_id,
+                        status,
+                        message_preview,
+                        "" if preview_payload.get("ok") else preview_status,
+                        "" if preview_payload.get("ok") else preview_reason,
+                        json.dumps(request_payload, ensure_ascii=False),
+                        json.dumps(preview_payload, ensure_ascii=False),
                     ),
                 )
                 row = cur.fetchone()

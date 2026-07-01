@@ -162,8 +162,16 @@ export function syncLivingInfoContentCandidates(payload = {}) {
   return postJson('/api/admin/content/living-info/sync', payload)
 }
 
+export function generateLivingInfoCardPreviews(payload = {}) {
+  return postJson('/api/admin/content/living-info/card-preview-dry-run', payload, { timeoutMs: 60000 })
+}
+
 export function publishContentCandidate(id, payload = {}) {
   return postJson(`/api/admin/content/candidates/${id}/publish`, payload)
+}
+
+export function generateContentCandidateCardPreview(id, payload = {}) {
+  return postJson(`/api/admin/content/candidates/${id}/card-preview-dry-run`, payload, { timeoutMs: 60000 })
 }
 
 export function sendContentCandidateToTelegram(id, payload = {}) {

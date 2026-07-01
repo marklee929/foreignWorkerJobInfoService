@@ -3416,6 +3416,16 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 limit = int(payload.get("limit") or 100) if isinstance(payload, dict) else 100
                 self._send_json(content_service().sync_living_info(limit=max(1, min(limit, 500))))
+            elif path == "/api/admin/content/living-info/card-preview-dry-run":
+                payload = self._read_json()
+                limit = int(payload.get("limit") or 20) if isinstance(payload, dict) else 20
+                status = str(payload.get("status") or "READY_TO_REVIEW") if isinstance(payload, dict) else "READY_TO_REVIEW"
+                self._send_json(
+                    content_service().generate_living_info_card_previews(
+                        limit=max(1, min(limit, 100)),
+                        status=status,
+                    )
+                )
             elif path == "/api/admin/content/living-info/prepare-clusters":
                 payload = self._read_json()
                 limit = int(payload.get("limit") or 100) if isinstance(payload, dict) else 100
@@ -3431,6 +3441,13 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 limit = int(payload.get("limit") or 20) if isinstance(payload, dict) else 20
                 dry_run = bool(payload.get("dryRun", True)) if isinstance(payload, dict) else True
                 self._send_json(run_living_info_content_prep_cycle(limit=max(1, min(limit, 100)), dry_run=dry_run))
+            elif path.startswith("/api/admin/content/candidates/") and path.endswith("/card-preview-dry-run"):
+                raw_id = path.split("/")[-2]
+                if not raw_id.isdigit():
+                    self._send_json({"ok": False, "message": "content candidate id is invalid"}, status=400)
+                    return
+                result = content_service().generate_card_preview_dry_run(int(raw_id))
+                self._send_json(result, status=200 if result.get("ok") else 404)
             elif path.startswith("/api/admin/content/candidates/") and path.endswith("/send-telegram-review"):
                 raw_id = path.split("/")[-2]
                 candidate = content_candidate_detail(int(raw_id))
