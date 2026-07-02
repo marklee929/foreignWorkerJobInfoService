@@ -12,10 +12,10 @@ import {
   fetchContentDashboard,
   generateContentCandidateCardPreview,
   generateLivingInfoCardPreviews,
+  runLivingInfoPrepCycle,
   scoreContentCandidate,
   sendContentCandidateToTelegram,
   syncContentCandidates,
-  syncLivingInfoContentCandidates,
 } from '../services/apiClient'
 import { logoutAdmin, resetDeviceId } from '../services/authService'
 
@@ -195,9 +195,11 @@ async function syncLivingInfo() {
   loadError.value = ''
   livingInfoSyncResult.value = null
   try {
-    const result = await syncLivingInfoContentCandidates({ limit: 100 })
+    const result = await runLivingInfoPrepCycle({ limit: 100, dryRun: false })
     livingInfoSyncResult.value = result
-    actionMessage.value = `Living info prepared: seen ${result.seen_count || 0}, synced ${result.synced_count || 0}, skipped ${result.skipped_count || 0}`
+    const prepare = result.prepare || {}
+    const sync = result.sync || {}
+    actionMessage.value = `Living info prepared: clusters ${prepare.cluster_count || 0}, written ${prepare.written_count || 0}, synced ${sync.synced_count || 0}, skipped ${sync.skipped_count || 0}`
     sourceFilter.value = 'LIVING_INFO'
     statusFilter.value = 'READY_TO_REVIEW'
     publishableOnly.value = false
@@ -369,10 +371,13 @@ onMounted(loadAll)
         <p v-if="loadError" class="mb-md rounded border border-error bg-error-container px-md py-sm text-body-sm text-error">{{ loadError }}</p>
         <p v-if="actionMessage" class="mb-md rounded border border-success bg-success-container px-md py-sm text-body-sm text-success">{{ actionMessage }}</p>
         <p v-if="livingInfoSyncResult" class="mb-md rounded border border-outline-variant bg-surface-container-low px-md py-sm text-body-sm">
-          living_info.topic_cluster manual sync:
-          seen {{ livingInfoSyncResult.seen_count || 0 }},
-          synced {{ livingInfoSyncResult.synced_count || 0 }},
-          skipped {{ livingInfoSyncResult.skipped_count || 0 }}
+          living_info prep-cycle:
+          dryRun {{ livingInfoSyncResult.dry_run ? 'YES' : 'NO' }},
+          prepared {{ livingInfoSyncResult.prepare?.seen_count || 0 }},
+          clusters {{ livingInfoSyncResult.prepare?.cluster_count || 0 }},
+          written {{ livingInfoSyncResult.prepare?.written_count || 0 }},
+          synced {{ livingInfoSyncResult.sync?.synced_count || 0 }},
+          skipped {{ livingInfoSyncResult.sync?.skipped_count || 0 }}
         </p>
         <p v-if="bulkCardPreviewResult" class="mb-md rounded border border-outline-variant bg-surface-container-low px-md py-sm text-body-sm">
           living_info card preview dry-run:

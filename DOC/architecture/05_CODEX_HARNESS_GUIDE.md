@@ -196,6 +196,73 @@ The task can proceed only with explicit limits. Codex must state what it will no
 
 The task is unsafe for unattended automation. Codex must stop and report.
 
+## Confirmation and Approval Policy
+
+Codex must separate reasoning confirmation from platform/tool approval.
+
+### Chat-Level Confirmation
+
+Chat-level confirmation means Codex asks the user in conversation:
+
+- "진행할까요?"
+- "적용할까요?"
+- "예를 눌러주세요."
+- "계속할까요?"
+
+This is not allowed when the user has already issued an execution command, including:
+
+- `다음 요청 진행`
+- `다음 테스크`
+- `계속 진행`
+- `쭉 진행`
+- `!wc-next`
+- an execute prompt with declared `PURPOSE FUNCTION`, `AREA`, and `MODE`
+
+Required behavior:
+
+- proceed without chat-level confirmation when the task is inside the declared `AREA` and `MODE`
+- choose the smallest safe implementation path
+- record assumptions in the report instead of waiting
+- stop only at a protected boundary or unsafe ambiguity
+
+Forbidden behavior:
+
+- waiting all day for user confirmation when a safe path exists
+- restating a tool approval prompt in chat
+- telling the user which approval option to click
+- using "I need confirmation" as a substitute for bounded execution
+
+### Platform or Tool Approval
+
+Platform or tool approval means the Codex app, shell sandbox, filesystem sandbox, or external connector asks for permission before executing an operation.
+
+Codex does not control that prompt. Codex must not convert it into another chat question.
+
+If a platform/tool approval is rejected or unavailable:
+
+```text
+classify as TOOL_APPROVAL_REJECTED or TOOL_WRITE_REJECTED
+record the attempted change
+continue any remaining read-only or already-authorized verification/reporting work
+write a stop/partial report only when no safe authorized work remains
+do not ask the user to click approval in chat
+```
+
+### Required Security Approval
+
+The following still require explicit approval or a stop report:
+
+- external network or dependency installation
+- destructive filesystem operation
+- writes outside the workspace
+- auth/env/secrets/token handling
+- production Telegram send
+- Facebook publishing
+- scheduler/bot state changes
+- destructive DB operation or migration
+
+This policy prevents Codex from becoming idle during unattended WorkConnect work while preserving protected boundaries.
+
 ## Trigger Card Format
 
 Use trigger cards to decide when the harness must intervene.

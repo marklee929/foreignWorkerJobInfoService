@@ -35,3 +35,23 @@ def test_frontend_api_client_exposes_manual_living_info_sync() -> None:
 
     assert "syncLivingInfoContentCandidates" in source
     assert "postJson('/api/admin/content/living-info/sync', payload)" in source
+    assert "runLivingInfoPrepCycle" in source
+    assert "postJson('/api/admin/content/living-info/prep-cycle', payload" in source
+
+
+def test_content_management_page_uses_prep_cycle_for_living_info_prepare() -> None:
+    source = (
+        ROOT
+        / "foreign_worker_life_info_collector"
+        / "admin_ui"
+        / "src"
+        / "views"
+        / "ContentManagementPage.vue"
+    ).read_text(encoding="utf-8")
+
+    start = source.index("async function syncLivingInfo()")
+    end = source.index("async function generateLivingInfoCardPreviewBatch", start)
+    block = source[start:end]
+
+    assert "runLivingInfoPrepCycle({ limit: 100, dryRun: false })" in block
+    assert "syncLivingInfoContentCandidates" not in block

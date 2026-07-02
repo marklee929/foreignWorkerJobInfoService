@@ -162,6 +162,10 @@ export function syncLivingInfoContentCandidates(payload = {}) {
   return postJson('/api/admin/content/living-info/sync', payload)
 }
 
+export function runLivingInfoPrepCycle(payload = {}) {
+  return postJson('/api/admin/content/living-info/prep-cycle', payload, { timeoutMs: 60000 })
+}
+
 export function generateLivingInfoCardPreviews(payload = {}) {
   return postJson('/api/admin/content/living-info/card-preview-dry-run', payload, { timeoutMs: 60000 })
 }
