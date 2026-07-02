@@ -404,23 +404,34 @@ Required behavior:
 - read `CODEX_BOOTSTRAP.md`
 - read `DOC/architecture/05_CODEX_HARNESS_GUIDE.md`
 - read today KST `DOC/walkthrough/YYYY-MM-DD - execute prompt.md`
-- find the single exact WorkConnect completion marker, or apply `First-Run Execute Prompt Fallback` when the file has no marker yet
-- execute only the next queued task below the marker; if first-run fallback applies, execute the whole file as the first pending task
+- find the exact WorkConnect completion marker only to determine whether the daily queue is already fully complete
+- if the file has no exact completion marker, treat pending `!wc-next`/task blocks as the active queue
+- execute pending `!wc-next`/task blocks sequentially from top to bottom until the last executable prompt is complete, a stop condition is reached, or a protected boundary blocks further progress
 - do not modify protected areas unless explicitly approved
-- save the final report to `DOC/walkthrough/execution-history/YYYY-MM-DD/`
-- update today execute prompt with the execution result
-- move or rewrite the completion marker so the final document has exactly one exact marker at the final boundary
+- save a report to `DOC/walkthrough/execution-history/YYYY-MM-DD/` after each completed checkpoint/task block
+- update today execute prompt with each checkpoint result
+- use `[WC_CHECKPOINT]` or a normal result heading for intermediate checkpoint summaries
+- add the exact completion marker only after the last executable prompt in the queue is complete
 - create or update a correction-loop entry when a recurring miss, harness violation, chat-only report, or closeout failure occurred
-- end with the exact completion marker in the execute prompt, not only in chat
+- end with the exact completion marker in the execute prompt, not only in chat, only when the whole queue has completed
 
-Queue-drain override:
+Queue-drain rule:
 
-- default behavior is one queued task per user turn
-- if the user explicitly says to continue until the whole queue/task set is complete, Codex may execute queued tasks sequentially in the same turn
+- default behavior for `!wc-next`, `다음 작업`, `이어서 진행`, `계속 진행`, and similar WorkConnect walkthrough commands is queue-drain execution
+- a `!wc-next` block inside the execute prompt is a checkpoint and task boundary, not a reason to stop the user turn
+- Codex should continue to the next pending block after saving the checkpoint report and updating the execute prompt
 - queue-drain mode does not override task-level `Stop after report` when the next task requires explicit approval, protected areas, destructive DB work, scheduler/publisher/auth/env changes, or unresolved ownership decisions
-- after each completed queued task, Codex must save a report and update the execute prompt before proceeding
+- after each completed queued task/checkpoint, Codex must save a report and update the execute prompt before proceeding
 - if Codex stops on a protected/precondition gate, the marker must remain immediately before the blocked pending task, and the stop reason must be recorded in the report
+- when stopping before the final prompt, Codex must not add the exact completion marker; it should leave a checkpoint/stop report instead
 - queue-drain mode must not mark later pending tasks as complete unless they were actually executed and verified
+
+Completion marker semantics:
+
+- `[WC_EXECUTION_COMPLETE]` means the requested daily queue is complete through the last executable prompt.
+- It is not a phase marker and must not be used after an intermediate `!wc-next` block when more pending prompts remain.
+- Intermediate results should be recorded with `[WC_CHECKPOINT]`, `checkpoint_result:`, or a normal report heading.
+- The exact completion marker should appear exactly once after closeout, and only at the final completed boundary.
 
 ### TRIGGER CARD: INDIVIDUAL_REQUEST_DEFAULT_REVIEW
 

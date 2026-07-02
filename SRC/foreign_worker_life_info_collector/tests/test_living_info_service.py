@@ -9,6 +9,7 @@ from foreign_worker_life_info_collector.living_info.service import (
     topic_cluster_to_content_candidate_payload,
     usable_source_url,
 )
+from foreign_worker_life_info_collector.living_info.source_registry import official_living_info_sources
 
 
 class FakeRepository:
@@ -110,6 +111,18 @@ def test_ingest_skips_missing_source_url() -> None:
 
     assert result["ok"] is False
     assert result["status"] == "SKIPPED_SOURCE_INVALID"
+
+
+def test_official_living_info_source_registry_is_primary_and_bounded() -> None:
+    sources = official_living_info_sources()
+    keys = {source["key"] for source in sources}
+
+    assert len(sources) >= 8
+    assert {"seoul-global-center", "hikorea", "nhis", "nps", "moel", "gov-kr"}.issubset(keys)
+    assert all(source["trust_level"] == "PRIMARY" for source in sources)
+    assert all(source["url"].startswith("https://") for source in sources)
+    assert all(source["domain"] for source in sources)
+    assert all(source["category"] for source in sources)
 
 
 def sample_ready_topic_cluster() -> dict:

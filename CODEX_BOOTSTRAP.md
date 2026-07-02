@@ -31,13 +31,14 @@ Implementation may proceed only when the user gives a clear bounded fix command 
 2. Read `DOC/architecture/05_CODEX_HARNESS_GUIDE.md`.
 3. Read `DOC/architecture/06_WORK_AREA_REGISTRY.md`.
 4. Read today KST `DOC/walkthrough/YYYY-MM-DD - execute prompt.md`.
-5. Find the single exact WorkConnect completion marker, or apply the first-run fallback when the execute prompt has no marker yet.
-6. Execute only the next queued task below the marker. If the first-run fallback applies, treat the whole execute prompt as the first pending task.
+5. Find the WorkConnect completion marker only to determine whether the whole daily queue is already complete. If the marker is missing, treat the uncompleted execute prompt as the active queue.
+6. Execute the active queue from the first pending `!wc-next`/task block through the last prompt in the file, in order. A `!wc-next` block is a checkpoint, not a stop point.
 7. Do not touch protected areas unless the task explicitly approves them.
 8. Save the final report under `DOC/walkthrough/execution-history/YYYY-MM-DD/`.
 9. Update today execute prompt with the result.
-10. Move or rewrite the WorkConnect completion marker so the final execute prompt has exactly one marker at the final boundary.
-11. If a recurring miss, chat-only report, closeout failure, repository mismatch, or protected-boundary confusion occurred, create or update a correction-loop entry.
+10. Write checkpoint summaries after completed intermediate blocks without using the exact completion marker.
+11. Add the exact WorkConnect completion marker only after the last executable prompt has completed, so the final execute prompt has exactly one marker at the end of the completed queue.
+12. If a recurring miss, chat-only report, closeout failure, repository mismatch, or protected-boundary confusion occurred, create or update a correction-loop entry.
 
 ## Command Lexicon
 
@@ -85,11 +86,15 @@ It belongs in execute prompt files only as the boundary marker, on its own line.
 
 Use `[COMPLETION_MARKER_EXAMPLE_DO_NOT_COPY]` in examples.
 
+Do not use the exact completion marker for intermediate checkpoints. Use `[WC_CHECKPOINT]` or a normal result heading for completed intermediate `!wc-next` blocks.
+
 ## First-Run Fallback
 
-* If today execute prompt exists, has no exact marker, and appears to contain one clear pending task starting with `!wc-next`, `!wc-audit`, `!wc-fix`, `PURPOSE FUNCTION:`, `AREA:`, or `MODE:`, Codex should treat the whole file as the first pending task.
-* After finishing that first task, Codex must append the execution result and put the exact marker as the final line.
-* If the marker is missing but the file contains completed reports, multiple unrelated tasks, or ambiguous history, Codex must stop and report.
+* If today execute prompt exists and has no exact marker, Codex should treat the file as an active queue when it contains pending `!wc-next`/task blocks and no evidence that the whole queue already completed.
+* Multiple `!wc-next` blocks in one execute prompt are sequential checkpoints in one queue-drain run, not separate user-turn boundaries.
+* After each intermediate block, Codex must save a report and add a non-final checkpoint summary without using the exact completion marker.
+* After the last executable block completes, Codex must append the final execution result and put the exact marker as the final completion boundary.
+* If the marker is missing but the file contains ambiguous mixed history that cannot be separated into checkpoints and pending work, Codex must stop and report.
 
 ## Stop Conditions
 

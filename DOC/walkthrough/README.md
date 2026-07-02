@@ -24,29 +24,30 @@ The WorkConnect completion marker is `[WC_EXECUTION_COMPLETE]`.
 
 Meaning:
 
-- content above the marker is completed plan, execution, or report history
-- content below the marker is the pending queue
-- if there is no content below the marker, there is no pending work
+- the daily execute prompt queue has completed through the final executable prompt
+- the marker is a final completion boundary, not an intermediate phase/checkpoint marker
+- if more `!wc-next` blocks remain, do not use the exact completion marker yet
 
 There must be exactly one completion marker in a daily execute prompt file after closeout. If the marker is missing before the first run, Codex may use the first-run fallback below. If the marker is duplicated, Codex should stop and report instead of executing phases.
 
 Safety rules:
 
 - the marker must appear on its own line
-- the marker must be the final line when no queue remains
+- the marker must appear only after the final completed prompt in the queue
+- intermediate completed blocks should use `[WC_CHECKPOINT]` or a normal result heading instead
 - do not place the exact marker inside examples, comments, archived sections, or code blocks
 - use `[COMPLETION_MARKER_EXAMPLE_DO_NOT_COPY]` in examples
 - legacy decorated Korean markers and loose marker variants must be archived or renamed so scanners cannot match them
 
 ## First-Run Fallback
 
-If today execute prompt exists and has no completion marker yet, Codex should treat the whole file as the first pending task only when:
+If today execute prompt exists and has no completion marker yet, Codex should treat the file as an active pending queue when:
 
-- the file starts with one clear task command or header such as `!wc-audit`, `!wc-fix`, `PURPOSE FUNCTION:`, `AREA:`, or `MODE:`
+- the file contains one or more clear task commands or headers such as `!wc-next`, `!wc-audit`, `!wc-fix`, `PURPOSE FUNCTION:`, `AREA:`, or `MODE:`
 - the file does not contain completed reports or mixed history
 - there are no duplicate or legacy markers
 
-After the first task completes, Codex must append the execution result and put the exact marker as the final line.
+Codex must execute the active queue from top to bottom. After intermediate blocks, Codex must append checkpoint results without using the exact marker. After the final executable prompt completes, Codex must append the execution result and put the exact marker at the final completed boundary.
 
 ## Short Command Triggers
 
@@ -76,21 +77,23 @@ For walkthrough-based execution, Codex must:
 1. read `DOC/architecture/` first
 2. read the current execute prompt file
 3. find the completion marker, or apply first-run fallback when allowed
-4. execute only the content below the marker, or the whole file when first-run fallback applies
+4. execute the active pending queue from the first pending block through the last executable prompt
 5. process phases from top to bottom
-6. verify and report after each phase
-7. proceed to the next phase only when success criteria are met
+6. verify and report after each phase/checkpoint
+7. proceed to the next phase/checkpoint only when success criteria are met and no protected stop condition is hit
 
 Protected areas, stop conditions, and declared `PURPOSE FUNCTION`, `AREA`, and `MODE` still control execution.
 
 ## Completion Marker Movement
 
-After all executable phases are complete, and only when the task allows editing the execute prompt file, Codex should:
+After all executable prompts in the active queue are complete, and only when the task allows editing the execute prompt file, Codex should:
 
-1. remove the old marker
+1. remove any old misplaced final marker
 2. keep executed prompts and result summaries in the completed history area
-3. place the marker between completed history and remaining pending queue
-4. leave the marker as the final line when no queue remains
+3. keep intermediate completions as checkpoint summaries, not exact completion markers
+4. place the exact completion marker after the final completed prompt boundary
+
+If Codex stops before the final prompt because of a protected boundary or precondition failure, it must record a stop/checkpoint report and avoid writing the exact completion marker.
 
 Closeout is incomplete if the report exists only in chat.
 

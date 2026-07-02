@@ -10,6 +10,7 @@ import {
   fetchContentCandidateDetail,
   fetchContentCandidates,
   fetchContentDashboard,
+  fetchLivingInfoReadinessDiagnostics,
   generateContentCandidateCardPreview,
   generateLivingInfoCardPreviews,
   runLivingInfoPrepCycle,
@@ -26,12 +27,14 @@ const publishLogs = ref([])
 const loading = ref(false)
 const syncing = ref(false)
 const livingInfoSyncing = ref(false)
+const livingInfoReadinessLoading = ref(false)
 const cardPreviewing = ref(false)
 const bulkCardPreviewing = ref(false)
 const actioningId = ref(0)
 const loadError = ref('')
 const actionMessage = ref('')
 const livingInfoSyncResult = ref(null)
+const livingInfoReadiness = ref(null)
 const cardPreviewResult = ref(null)
 const bulkCardPreviewResult = ref(null)
 const searchText = ref('')
@@ -168,7 +171,7 @@ async function loadRows() {
 }
 
 async function loadAll() {
-  await Promise.all([loadDashboard(), loadRows()])
+  await Promise.all([loadDashboard(), loadRows(), loadLivingInfoReadiness()])
 }
 
 async function syncAll() {
@@ -209,6 +212,19 @@ async function syncLivingInfo() {
     loadError.value = error instanceof Error ? error.message : 'Living info preparation failed.'
   } finally {
     livingInfoSyncing.value = false
+  }
+}
+
+async function loadLivingInfoReadiness() {
+  if (livingInfoReadinessLoading.value) return
+  livingInfoReadinessLoading.value = true
+  loadError.value = ''
+  try {
+    livingInfoReadiness.value = await fetchLivingInfoReadinessDiagnostics({ limit: 100 })
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : 'Living info readiness diagnostics failed.'
+  } finally {
+    livingInfoReadinessLoading.value = false
   }
 }
 
@@ -357,6 +373,10 @@ onMounted(loadAll)
               <Shuffle :size="16" />
               Living info prepare
             </button>
+            <button class="btn-secondary inline-flex items-center gap-xs" type="button" :disabled="livingInfoReadinessLoading" @click="loadLivingInfoReadiness">
+              <RefreshCw :size="16" />
+              Living readiness
+            </button>
             <button class="btn-secondary inline-flex items-center gap-xs" type="button" :disabled="bulkCardPreviewing" @click="generateLivingInfoCardPreviewBatch">
               <Shuffle :size="16" />
               Living info card preview
@@ -378,6 +398,14 @@ onMounted(loadAll)
           written {{ livingInfoSyncResult.prepare?.written_count || 0 }},
           synced {{ livingInfoSyncResult.sync?.synced_count || 0 }},
           skipped {{ livingInfoSyncResult.sync?.skipped_count || 0 }}
+        </p>
+        <p v-if="livingInfoReadiness" class="mb-md rounded border border-outline-variant bg-surface-container-low px-md py-sm text-body-sm">
+          living_info readiness:
+          sources {{ livingInfoReadiness.seen_count || 0 }},
+          clusters {{ livingInfoReadiness.cluster_count || 0 }},
+          publicReady {{ livingInfoReadiness.public_ready_count || 0 }},
+          notReady {{ livingInfoReadiness.not_ready_count || 0 }},
+          topReason {{ Object.keys(livingInfoReadiness.top_skip_reasons || {})[0] || '-' }}
         </p>
         <p v-if="bulkCardPreviewResult" class="mb-md rounded border border-outline-variant bg-surface-container-low px-md py-sm text-body-sm">
           living_info card preview dry-run:

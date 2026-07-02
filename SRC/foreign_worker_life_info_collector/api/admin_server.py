@@ -57,6 +57,23 @@ BOT_STATUS_LABELS = {
 CONTENT_BOT_MODULE_KEY = "bot.content_generation"
 LIFESTYLE_BOT_MODULE_KEY = "bot.lifestyle_info"
 IMMIGRATION_BOT_MODULE_KEY = "bot.immigration_info"
+LIFESTYLE_BOT_DEFAULT_MAX_KEYWORDS = 8
+LIFESTYLE_BOT_DEFAULT_PER_KEYWORD_LIMIT = 3
+LIFESTYLE_BOT_KEYWORDS = [
+    "foreign residents Korea living guide",
+    "foreign residents Korea housing bank healthcare",
+    "Korea cost of living foreigners",
+    "site:seoul.go.kr foreign residents living support Korea",
+    "site:global.seoul.go.kr foreign residents housing healthcare",
+    "site:nhis.or.kr foreigners Korea health insurance",
+    "site:nps.or.kr foreign workers Korea national pension",
+    "site:moel.go.kr foreign workers Korea labor rights",
+    "site:hikorea.go.kr foreign residents Korea stay guide",
+    "site:gov.kr foreigners Korea public service",
+    "foreign resident support center Korea housing banking",
+    "Gyeonggi foreign resident support center living guide",
+    "Korea foreign residents transportation mobile banking housing",
+]
 BOT_SWITCH_DEFINITIONS = {
     CONTENT_BOT_MODULE_KEY: {
         "group": "bot",
@@ -1021,6 +1038,76 @@ def run_living_info_content_prep_cycle(limit: int = 20, dry_run: bool = True) ->
     return result
 
 
+def living_info_readiness_diagnostics(limit: int = 100) -> dict[str, Any]:
+    limit = max(1, min(int(limit or 100), 500))
+    prepare = content_service().prepare_living_info_topic_clusters(limit=limit, dry_run=True)
+    clusters = list(prepare.get("clusters") or [])
+    ready_count = 0
+    reason_counts: dict[str, int] = {}
+    cluster_summaries: list[dict[str, Any]] = []
+    for cluster in clusters:
+        public_ready = str(cluster.get("public_candidate_ready_yn") or "").upper() == "Y"
+        if public_ready:
+            ready_count += 1
+            reasons = ["ready"]
+        else:
+            reasons = living_info_cluster_skip_reasons(cluster)
+            for reason in reasons:
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        cluster_summaries.append(
+            {
+                "topic_key": cluster.get("topic_key", ""),
+                "primary_category": cluster.get("primary_category", ""),
+                "source_count": int(cluster.get("source_count") or 0),
+                "evidence_count": int(cluster.get("evidence_count") or 0),
+                "official_source_count": int(cluster.get("official_source_count") or 0),
+                "secondary_source_count": int(cluster.get("secondary_source_count") or 0),
+                "readiness_score": float(cluster.get("readiness_score") or 0),
+                "public_candidate_ready_yn": cluster.get("public_candidate_ready_yn", ""),
+                "validation_status": cluster.get("validation_status", ""),
+                "skip_reasons": [] if public_ready else reasons,
+            }
+        )
+    return {
+        "ok": True,
+        "source": "living_info.normalized_item",
+        "dry_run": True,
+        "limit": limit,
+        "seen_count": int(prepare.get("seen_count") or 0),
+        "cluster_count": int(prepare.get("cluster_count") or 0),
+        "public_ready_count": ready_count,
+        "not_ready_count": max(0, len(clusters) - ready_count),
+        "official_source_count": sum(int(cluster.get("official_source_count") or 0) for cluster in clusters),
+        "secondary_source_count": sum(int(cluster.get("secondary_source_count") or 0) for cluster in clusters),
+        "top_skip_reasons": dict(sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))),
+        "sample_clusters": cluster_summaries[:10],
+        "external_output": "NONE",
+        "publish": "BLOCKED",
+        "telegram": "NOT_SENT",
+    }
+
+
+def living_info_cluster_skip_reasons(cluster: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    readiness_score = float(cluster.get("readiness_score") or 0)
+    validation_status = str(cluster.get("validation_status") or "").upper()
+    official_count = int(cluster.get("official_source_count") or 0)
+    secondary_count = int(cluster.get("secondary_source_count") or 0)
+    source_count = int(cluster.get("source_count") or 0)
+    evidence_count = int(cluster.get("evidence_count") or 0)
+    if readiness_score < 60:
+        reasons.append("readiness_score_below_threshold")
+    if validation_status not in {"VALIDATED", "READY"}:
+        reasons.append("validation_status_not_ready")
+    if official_count <= 0:
+        reasons.append("missing_primary_evidence")
+    if official_count <= 0 and secondary_count <= 0:
+        reasons.append("missing_trusted_evidence")
+    if source_count <= 0 or evidence_count <= 0:
+        reasons.append("missing_source_evidence")
+    return reasons or ["public_candidate_ready_yn_not_y"]
+
+
 def run_living_info_content_prep_scheduler() -> None:
     settings = living_info_content_prep_settings()
     if not settings["enabled"]:
@@ -1102,25 +1189,40 @@ def immigration_bot_status() -> dict[str, Any]:
 
 
 def run_lifestyle_bot_once() -> None:
-    keywords = [
-        "foreign residents Korea living guide",
-        "foreigners in Korea housing bank healthcare",
-        "Korea cost of living foreigners",
-    ]
     try:
         set_one_shot_bot_status(LIFESTYLE_BOT_STATUS, LIFESTYLE_BOT_LOCK, "RUNNING", "생활정보 후보 수집 중")
         write_bot_log("lifestyle_bot", "STARTED", "생활정보 봇 dry-run 수집 시작")
         summaries: list[dict[str, Any]] = []
-        max_keywords = max(1, min(int(os.environ.get("LIFESTYLE_BOT_MAX_KEYWORDS", "3") or "3"), len(keywords)))
-        for keyword in keywords[:max_keywords]:
+        max_keywords = max(
+            1,
+            min(
+                int(
+                    os.environ.get("LIFESTYLE_BOT_MAX_KEYWORDS", str(LIFESTYLE_BOT_DEFAULT_MAX_KEYWORDS))
+                    or str(LIFESTYLE_BOT_DEFAULT_MAX_KEYWORDS)
+                ),
+                len(LIFESTYLE_BOT_KEYWORDS),
+            ),
+        )
+        per_keyword_limit = max(
+            1,
+            min(
+                int(
+                    os.environ.get("LIFESTYLE_BOT_PER_KEYWORD_LIMIT", str(LIFESTYLE_BOT_DEFAULT_PER_KEYWORD_LIMIT))
+                    or str(LIFESTYLE_BOT_DEFAULT_PER_KEYWORD_LIMIT)
+                ),
+                10,
+            ),
+        )
+        for keyword in LIFESTYLE_BOT_KEYWORDS[:max_keywords]:
             result = NewsPipeline(repository=news_repository(), collectors=lifestyle_news_collectors()).run(
                 keyword=keyword,
                 dry_run=True,
-                limit=1,
+                limit=per_keyword_limit,
             )
             summaries.append(
                 {
                     "keyword": keyword,
+                    "limit": per_keyword_limit,
                     "collected_count": result.get("collected_count", 0),
                     "saved_count": result.get("saved_count", 0),
                     "processed_count": result.get("processed_count", 0),
@@ -1128,7 +1230,12 @@ def run_lifestyle_bot_once() -> None:
                 }
             )
         total_saved = sum(int(item.get("saved_count") or 0) for item in summaries)
-        result_payload = {"keywords": summaries, "saved_count": total_saved}
+        result_payload = {
+            "keywords": summaries,
+            "keyword_count": len(summaries),
+            "per_keyword_limit": per_keyword_limit,
+            "saved_count": total_saved,
+        }
         write_bot_log("lifestyle_bot", "COMPLETED", f"생활정보 봇 dry-run 수집 완료: 저장 {total_saved}건")
         set_one_shot_bot_status(
             LIFESTYLE_BOT_STATUS,
@@ -3292,6 +3399,9 @@ class AdminRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(format_bot_status(bot_runtime_row()))
             elif path == "/api/admin/content-bot/status":
                 self._send_json(content_bot_status())
+            elif path == "/api/admin/content/living-info/readiness-diagnostics":
+                limit = clamp_query_int(query, "limit", 100, minimum=1, maximum=500)
+                self._send_json(living_info_readiness_diagnostics(limit=limit))
             elif path == "/api/admin/content/living-info/prep-status":
                 self._send_json(living_info_content_prep_status())
             elif path == "/api/admin/lifestyle-bot/status":

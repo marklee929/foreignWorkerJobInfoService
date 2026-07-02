@@ -166,6 +166,10 @@ export function runLivingInfoPrepCycle(payload = {}) {
   return postJson('/api/admin/content/living-info/prep-cycle', payload, { timeoutMs: 60000 })
 }
 
+export function fetchLivingInfoReadinessDiagnostics(params = {}) {
+  return getJson(withQuery('/api/admin/content/living-info/readiness-diagnostics', params))
+}
+
 export function generateLivingInfoCardPreviews(payload = {}) {
   return postJson('/api/admin/content/living-info/card-preview-dry-run', payload, { timeoutMs: 60000 })
 }
